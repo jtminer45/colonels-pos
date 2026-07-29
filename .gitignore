@@ -26,3 +26,10 @@ till-app/tsconfig.tsbuildinfo
 till-app/vite.config.js
 till-app/vite.config.d.ts
 till-app/tsconfig.node.tsbuildinfo
+
+# Raw uploaded menu/logo photos dropped directly in assets/ — only the
+# processed, slugified copies in assets/menu_photos/ are actually used by
+# the apps and committed; these originals are reference material only.
+assets/*.jpeg
+assets/*.jpg
+assets/*.webp

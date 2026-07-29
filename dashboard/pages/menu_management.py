@@ -3,7 +3,7 @@ from pathlib import Path
 import streamlit as st
 
 import services
-from session import current_user
+from session import require_user
 
 ASSETS_MENU_PHOTOS = Path(__file__).resolve().parent.parent.parent / "assets" / "menu_photos"
 
@@ -13,7 +13,7 @@ st.caption(
     "with no code change or redeploy needed. Removing something here deactivates it; it never "
     "deletes historical sales that reference it."
 )
-user = current_user()
+user = require_user()
 
 
 def photo_display_src(base_photo_url: str | None):

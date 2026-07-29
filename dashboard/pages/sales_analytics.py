@@ -1,15 +1,22 @@
-from datetime import date, timedelta
+from datetime import timedelta
 
 import streamlit as st
 import plotly.express as px
 
+from db import now_local
 import queries
 
 st.title("📈 Sales Analytics")
 
+# now_local().date(), not datetime.date.today() — Render's container clock is
+# UTC, but every sale is timestamped in Africa/Lagos (UTC+1). Using the
+# server's raw local date here would default "today" to a date that's
+# actually still yesterday in Lagos for the last hour of each day, hiding
+# the newest sales from the default view.
+today_local = now_local().date()
 col1, col2 = st.columns(2)
-start_date = col1.date_input("From", value=date.today() - timedelta(days=6))
-end_date = col2.date_input("To", value=date.today())
+start_date = col1.date_input("From", value=today_local - timedelta(days=6))
+end_date = col2.date_input("To", value=today_local)
 
 if start_date > end_date:
     st.error("Start date must be before end date.")

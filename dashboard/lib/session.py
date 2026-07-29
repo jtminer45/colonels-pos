@@ -22,6 +22,21 @@ def current_user() -> dict | None:
     return st.session_state.get("user")
 
 
+def require_user() -> dict:
+    """Like current_user(), but for pages that mutate data (they call this
+    instead of current_user() directly). On Render's free tier the process
+    can restart between page load and a click (idle spin-down, a redeploy),
+    which wipes server-side session_state — app.py's require_login() gate
+    normally catches this, but if a stale page still manages to submit
+    after that happens, this turns what would be a raw `None["id"]`
+    crash into a clear "please log in again" message instead."""
+    user = current_user()
+    if user is None:
+        st.error("Your session has ended (the app may have restarted) — please refresh and log in again.")
+        st.stop()
+    return user
+
+
 def _do_login(username: str, password: str) -> None:
     try:
         user = auth_module.login(username, password)

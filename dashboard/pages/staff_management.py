@@ -1,13 +1,14 @@
-from datetime import date, timedelta
+from datetime import timedelta
 
 import streamlit as st
 
+from db import now_local
 import queries
 import services
-from session import current_user
+from session import require_user
 
 st.title("👥 Staff Management")
-user = current_user()
+user = require_user()
 
 st.subheader("Create Staff Account")
 st.caption(
@@ -85,9 +86,10 @@ with col3:
     st.caption("The real password is never stored or retrievable — only reset.")
 
 st.markdown("#### Sales Performance & Login History")
+today_local = now_local().date()  # Lagos time — see sales_analytics.py
 col1, col2 = st.columns(2)
-start = col1.date_input("From", value=date.today() - timedelta(days=29), key="staff_start")
-end = col2.date_input("To", value=date.today(), key="staff_end")
+start = col1.date_input("From", value=today_local - timedelta(days=29), key="staff_start")
+end = col2.date_input("To", value=today_local, key="staff_end")
 
 perf = queries.staff_sales_performance(int(selected_id), start.isoformat(), end.isoformat())
 c1, c2, c3 = st.columns(3)

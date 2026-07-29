@@ -1,7 +1,8 @@
-from datetime import date, timedelta
+from datetime import timedelta
 
 import streamlit as st
 
+from db import now_local
 import queries
 
 st.title("🔍 Audit Log")
@@ -10,9 +11,12 @@ st.caption(
     "staff-account change is recorded here — who, when, and why. Nothing here is ever silently deleted."
 )
 
+# See sales_analytics.py — now_local().date() keeps "today" in Lagos time,
+# matching how every timestamp in the database is actually stored.
+today_local = now_local().date()
 col1, col2, col3 = st.columns([1, 1, 2])
-start = col1.date_input("From", value=date.today() - timedelta(days=6))
-end = col2.date_input("To", value=date.today())
+start = col1.date_input("From", value=today_local - timedelta(days=6))
+end = col2.date_input("To", value=today_local)
 action_types = ["All"] + queries.distinct_action_types()
 action_filter = col3.selectbox("Action Type", options=action_types)
 

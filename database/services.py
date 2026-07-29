@@ -157,6 +157,29 @@ def initialize_inventory_for_date(date: str, opening_counts: dict[int, int]) -> 
         conn.close()
 
 
+def set_opening_count(date: str, item_variant_id: int, opening_count: int, user_id: int) -> None:
+    """Sets (or changes) how many of an item are available today — this is
+    what drives the till's "Sold Out" state (available = opening_count -
+    sold - wasted - reserved-by-open-table-tabs). Unlike
+    initialize_inventory_for_date(), this UPSERTs — a manager can adjust it
+    mid-day (kitchen made more, or something ran out), not just set it once
+    at day-start."""
+    if opening_count < 0:
+        raise ServiceError("Opening count cannot be negative.")
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO inventory_daily (date, item_variant_id, opening_count) VALUES (%s, %s, %s) "
+            "ON CONFLICT (date, item_variant_id) DO UPDATE SET opening_count = EXCLUDED.opening_count",
+            (date, item_variant_id, opening_count),
+        )
+        log_action(conn, user_id, "INVENTORY_OPENING_COUNT_SET",
+                   f"variant={item_variant_id} date={date} opening_count={opening_count}")
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def set_closing_count(date: str, item_variant_id: int, closing_count: int, user_id: int) -> None:
     conn = get_connection()
     try:

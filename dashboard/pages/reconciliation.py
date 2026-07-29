@@ -1,14 +1,14 @@
-from datetime import date, timedelta
+from datetime import timedelta
 
 import streamlit as st
 
-from db import get_connection, today_str
+from db import get_connection, today_str, now_local
 import queries
 import services
-from session import current_user
+from session import require_user
 
 st.title("🧾 Cash Reconciliation")
-user = current_user()
+user = require_user()
 
 st.subheader("Record Today's Cash Count")
 conn = get_connection()
@@ -41,9 +41,10 @@ if submitted:
 
 st.divider()
 st.subheader("Reconciliation History")
+today_local = now_local().date()  # Lagos time — see sales_analytics.py
 col1, col2 = st.columns(2)
-start = col1.date_input("From", value=date.today() - timedelta(days=29), key="rec_start")
-end = col2.date_input("To", value=date.today(), key="rec_end")
+start = col1.date_input("From", value=today_local - timedelta(days=29), key="rec_start")
+end = col2.date_input("To", value=today_local, key="rec_end")
 
 history = queries.reconciliation_history(start.isoformat(), end.isoformat())
 if history.empty:

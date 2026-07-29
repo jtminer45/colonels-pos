@@ -1,14 +1,14 @@
-from datetime import date, timedelta
+from datetime import timedelta
 
 import streamlit as st
 
-from db import get_connection, today_str
+from db import get_connection, today_str, now_local
 import queries
 import services
-from session import current_user
+from session import require_user
 
 st.title("💰 Costs & Purchases")
-user = current_user()
+user = require_user()
 
 st.subheader("Log a New Purchase")
 st.caption(
@@ -54,9 +54,10 @@ st.dataframe(
 st.divider()
 
 st.subheader("Profit Summary")
+today_local = now_local().date()  # Lagos time — see sales_analytics.py
 col1, col2 = st.columns(2)
-start = col1.date_input("From", value=date.today() - timedelta(days=29), key="cost_start")
-end = col2.date_input("To", value=date.today(), key="cost_end")
+start = col1.date_input("From", value=today_local - timedelta(days=29), key="cost_start")
+end = col2.date_input("To", value=today_local, key="cost_end")
 
 summary = queries.profit_summary(start.isoformat(), end.isoformat())
 c1, c2, c3, c4 = st.columns(4)
