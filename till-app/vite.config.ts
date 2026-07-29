@@ -13,13 +13,13 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
-      includeAssets: ["icons/*.png", "menu_photos/*.svg"],
+      includeAssets: ["icons/*.png", "menu_photos/*.svg", "menu_photos/*.jpg", "logo.png"],
       manifest: {
-        name: "Colonel's Bakery and Restaurant — Till",
-        short_name: "Colonel's Till",
-        description: "Till / point-of-sale app for Colonel's Bakery and Restaurant",
-        theme_color: "#0A0A1A",
-        background_color: "#0A0A1A",
+        name: "Colonels Restaurant & Garden — Till",
+        short_name: "Colonels Till",
+        description: "Till / point-of-sale app for Colonels Restaurant & Garden",
+        theme_color: "#0A0A0A",
+        background_color: "#0A0A0A",
         display: "standalone",
         orientation: "landscape",
         start_url: "/",
@@ -33,7 +33,11 @@ export default defineConfig({
         // Precache the app shell + bundled photos/icons so the UI renders
         // fully offline. API calls to the backend are NOT cached here —
         // sales must always hit the live database, never a stale cache.
-        globPatterns: ["**/*.{js,css,html,svg,png,ico}"],
+        globPatterns: ["**/*.{js,css,html,svg,png,jpg,ico}"],
+        // Real menu photos push total precache size well past workbox's
+        // default 2 MiB warning threshold — still small enough to cache
+        // safely, just needs a higher explicit limit.
+        maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
       },
     }),
   ],
