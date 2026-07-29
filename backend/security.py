@@ -32,16 +32,20 @@ def _load_or_create_secret() -> bytes:
     # redeploy/restart, silently invalidating every logged-in session. Set
     # SECRET_KEY as a real environment variable there (generate once,
     # store it in the service's env vars) so it survives restarts.
+    #
+    # Treated as an opaque string (UTF-8 encoded), not required to be hex —
+    # Render's own `generateValue: true` produces an arbitrary random
+    # string, not necessarily valid hex.
     env_key = os.environ.get("SECRET_KEY")
     if env_key:
-        return bytes.fromhex(env_key)
+        return env_key.encode("utf-8")
 
     if _SECRET_PATH.exists():
-        return bytes.fromhex(_SECRET_PATH.read_text().strip())
+        return _SECRET_PATH.read_text().strip().encode("utf-8")
     key = secrets.token_hex(32)
     _SECRET_PATH.write_text(key)
     _SECRET_PATH.chmod(0o600)
-    return bytes.fromhex(key)
+    return key.encode("utf-8")
 
 
 _SECRET_KEY = _load_or_create_secret()
