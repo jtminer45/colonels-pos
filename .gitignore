@@ -1,0 +1,23 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Database (local runtime data — never commit real sales data)
+database/colonels_pos.db
+database/colonels_pos.db-wal
+database/colonels_pos.db-shm
+
+# Backend secrets
+backend/.secret_key
+
+# Node / till-app
+till-app/node_modules/
+till-app/dist/
+till-app/dev-dist/
+
+# Streamlit
+dashboard/.streamlit/secrets.toml
+
+# OS
+.DS_Store
