@@ -33,10 +33,15 @@ def todays_totals(date: str) -> dict:
             (date,),
         ).fetchone()
 
+        # Naira prices move day to day, so "ingredient cost" uses the MOST
+        # RECENT purchase price per ingredient, not a lifetime average —
+        # a bag of flour bought 3 months ago at a lower price shouldn't
+        # water down today's estimate.
         ingredient_cost = conn.execute(
             "SELECT COALESCE(SUM(si.quantity * r.quantity_used * "
-            "  (SELECT COALESCE(SUM(p.cost)/NULLIF(SUM(p.quantity),0), 0) FROM purchases p "
-            "   WHERE p.ingredient_id = r.ingredient_id)), 0) AS cost "
+            "  (SELECT p.cost / NULLIF(p.quantity, 0) FROM purchases p "
+            "   WHERE p.ingredient_id = r.ingredient_id "
+            "   ORDER BY p.date DESC, p.id DESC LIMIT 1)), 0) AS cost "
             "FROM sale_items si "
             "JOIN sales s ON s.id = si.sale_id "
             "JOIN recipes r ON r.item_variant_id = si.item_variant_id "
@@ -252,6 +257,25 @@ def wastage_log(start_date: str, end_date: str) -> pd.DataFrame:
 # ---------------------------------------------------------------
 # Costs & purchases
 # ---------------------------------------------------------------
+
+def latest_ingredient_prices() -> pd.DataFrame:
+    """Most recent purchase price per ingredient — a quick reference for
+    what was last paid, since Naira prices can move day to day."""
+    return _df(
+        """
+        SELECT i.name AS ingredient, i.unit, latest.cost, latest.quantity,
+               ROUND((latest.cost / NULLIF(latest.quantity, 0))::numeric, 2) AS price_per_unit,
+               latest.date AS last_purchased
+        FROM ingredients i
+        LEFT JOIN LATERAL (
+            SELECT cost, quantity, date FROM purchases p
+            WHERE p.ingredient_id = i.id
+            ORDER BY p.date DESC, p.id DESC LIMIT 1
+        ) latest ON true
+        ORDER BY i.name
+        """
+    )
+
 
 def purchases_log(start_date: str, end_date: str) -> pd.DataFrame:
     return _df(

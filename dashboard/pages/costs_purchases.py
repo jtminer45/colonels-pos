@@ -11,6 +11,11 @@ st.title("💰 Costs & Purchases")
 user = current_user()
 
 st.subheader("Log a New Purchase")
+st.caption(
+    "Enter the quantity and the TOTAL you paid — e.g. 25 kg of flour for ₦45,000, not a per-kg price. "
+    "Naira prices move day to day, so every purchase is logged with today's date and its own price; "
+    "cost estimates elsewhere in the dashboard always use the most recent price, never an old average."
+)
 conn = get_connection()
 ingredients = conn.execute("SELECT id, name, unit FROM ingredients ORDER BY name").fetchall()
 conn.close()
@@ -31,8 +36,20 @@ if submitted:
         services.record_purchase(
             ingredient_options[ingredient_label], supplier, quantity, cost, today_str(), user["id"]
         )
-        st.success(f"Logged purchase of {quantity} of {ingredient_label} for ₦{cost:,.0f}.")
+        per_unit = cost / quantity
+        st.success(f"Logged {quantity} of {ingredient_label} for ₦{cost:,.0f} (₦{per_unit:,.2f} per unit).")
         st.rerun()
+
+st.divider()
+st.subheader("Most Recent Price Paid — By Ingredient")
+latest_prices = queries.latest_ingredient_prices()
+st.dataframe(
+    latest_prices.rename(columns={
+        "ingredient": "Ingredient", "unit": "Unit", "price_per_unit": "Price / Unit (₦)",
+        "cost": "Last Total Paid (₦)", "quantity": "Last Quantity", "last_purchased": "Date",
+    }),
+    width="stretch", hide_index=True,
+)
 
 st.divider()
 

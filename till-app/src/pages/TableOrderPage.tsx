@@ -41,6 +41,10 @@ export default function TableOrderPage({ tableId, onBack }: Props) {
 
   useEffect(() => {
     refetchOrder();
+    // Background refresh so a price change or another staff member's edit
+    // to this table shows up without needing to leave and re-enter it.
+    const interval = setInterval(refetchOrder, 15_000);
+    return () => clearInterval(interval);
   }, [refetchOrder]);
 
   async function handlePrintBill() {
