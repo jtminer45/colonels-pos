@@ -5,7 +5,7 @@ DataFrames for Plotly) rather than transactional writes used by the till.
 
 import pandas as pd
 
-from db import get_connection, VAT_RATE
+from db import get_connection
 
 
 def _df(sql: str, params: tuple = ()) -> pd.DataFrame:
@@ -28,7 +28,7 @@ def todays_totals(date: str) -> dict:
             "COALESCE(SUM(CASE WHEN payment_method='cash' THEN total ELSE 0 END), 0) AS cash, "
             "COALESCE(SUM(CASE WHEN payment_method='card' THEN total ELSE 0 END), 0) AS card, "
             "COUNT(*) AS sale_count "
-            "FROM sales WHERE date(timestamp) = ?",
+            "FROM sales WHERE timestamp::date = %s::date",
             (date,),
         ).fetchone()
 
@@ -39,12 +39,12 @@ def todays_totals(date: str) -> dict:
             "FROM sale_items si "
             "JOIN sales s ON s.id = si.sale_id "
             "JOIN recipes r ON r.item_variant_id = si.item_variant_id "
-            "WHERE si.is_voided = 0 AND date(s.timestamp) = ?",
+            "WHERE si.is_voided = 0 AND s.timestamp::date = %s::date",
             (date,),
         ).fetchone()["cost"] or 0
 
         wastage_value = conn.execute(
-            "SELECT COALESCE(SUM(value_lost), 0) AS v FROM wastage WHERE date = ?", (date,)
+            "SELECT COALESCE(SUM(value_lost), 0) AS v FROM wastage WHERE date = %s", (date,)
         ).fetchone()["v"]
 
         return {
@@ -64,7 +64,7 @@ def todays_totals(date: str) -> dict:
 def reconciliation_mismatches(date: str) -> pd.DataFrame:
     return _df(
         "SELECT r.*, u.username FROM reconciliation r JOIN users u ON u.id = r.staff_user_id "
-        "WHERE r.date = ? AND ABS(r.discrepancy_amount) > 0.01 ORDER BY r.created_at DESC",
+        "WHERE r.date = %s AND ABS(r.discrepancy_amount) > 0.01 ORDER BY r.created_at DESC",
         (date,),
     )
 
@@ -91,14 +91,14 @@ def sold_out_today(date: str) -> pd.DataFrame:
             LEFT JOIN (
                 SELECT si.item_variant_id, SUM(si.quantity) AS qty
                 FROM sale_items si JOIN sales s ON s.id = si.sale_id
-                WHERE si.is_voided = 0 AND date(s.timestamp) = ?
+                WHERE si.is_voided = 0 AND s.timestamp::date = %s::date
                 GROUP BY si.item_variant_id
             ) sold ON sold.item_variant_id = idl.item_variant_id
             LEFT JOIN (
-                SELECT item_variant_id, SUM(quantity) AS qty FROM wastage WHERE date = ?
+                SELECT item_variant_id, SUM(quantity) AS qty FROM wastage WHERE date = %s
                 GROUP BY item_variant_id
             ) wasted ON wasted.item_variant_id = idl.item_variant_id
-            WHERE idl.date = ?
+            WHERE idl.date = %s
         ) sub
         WHERE available <= 0
         ORDER BY item_name
@@ -122,7 +122,7 @@ def sales_by_item(start_date: str, end_date: str) -> pd.DataFrame:
         JOIN item_variants iv ON iv.id = si.item_variant_id
         JOIN menu_items mi ON mi.id = iv.menu_item_id
         JOIN categories c ON c.id = mi.category_id
-        WHERE si.is_voided = 0 AND date(s.timestamp) BETWEEN ? AND ?
+        WHERE si.is_voided = 0 AND s.timestamp::date BETWEEN %s::date AND %s::date
         GROUP BY mi.name, iv.variant_label, c.name
         ORDER BY revenue DESC
         """,
@@ -139,7 +139,7 @@ def sales_by_category(start_date: str, end_date: str) -> pd.DataFrame:
         JOIN item_variants iv ON iv.id = si.item_variant_id
         JOIN menu_items mi ON mi.id = iv.menu_item_id
         JOIN categories c ON c.id = mi.category_id
-        WHERE si.is_voided = 0 AND date(s.timestamp) BETWEEN ? AND ?
+        WHERE si.is_voided = 0 AND s.timestamp::date BETWEEN %s::date AND %s::date
         GROUP BY c.name ORDER BY revenue DESC
         """,
         (start_date, end_date),
@@ -151,7 +151,7 @@ def sales_by_staff(start_date: str, end_date: str) -> pd.DataFrame:
         """
         SELECT u.username, COUNT(DISTINCT s.id) AS sale_count, SUM(s.total) AS revenue
         FROM sales s JOIN users u ON u.id = s.staff_user_id
-        WHERE date(s.timestamp) BETWEEN ? AND ?
+        WHERE s.timestamp::date BETWEEN %s::date AND %s::date
         GROUP BY u.username ORDER BY revenue DESC
         """,
         (start_date, end_date),
@@ -161,8 +161,8 @@ def sales_by_staff(start_date: str, end_date: str) -> pd.DataFrame:
 def sales_by_hour(start_date: str, end_date: str) -> pd.DataFrame:
     return _df(
         """
-        SELECT strftime('%H', timestamp) AS hour, SUM(total) AS revenue, COUNT(*) AS sale_count
-        FROM sales WHERE date(timestamp) BETWEEN ? AND ?
+        SELECT to_char(timestamp::timestamp, 'HH24') AS hour, SUM(total) AS revenue, COUNT(*) AS sale_count
+        FROM sales WHERE timestamp::date BETWEEN %s::date AND %s::date
         GROUP BY hour ORDER BY hour
         """,
         (start_date, end_date),
@@ -172,8 +172,8 @@ def sales_by_hour(start_date: str, end_date: str) -> pd.DataFrame:
 def sales_over_time(start_date: str, end_date: str) -> pd.DataFrame:
     return _df(
         """
-        SELECT date(timestamp) AS day, SUM(total) AS revenue
-        FROM sales WHERE date(timestamp) BETWEEN ? AND ?
+        SELECT timestamp::date AS day, SUM(total) AS revenue
+        FROM sales WHERE timestamp::date BETWEEN %s::date AND %s::date
         GROUP BY day ORDER BY day
         """,
         (start_date, end_date),
@@ -190,12 +190,13 @@ def sold_quantity_for_variant(item_variant_id: int, date: str) -> int:
         row = conn.execute(
             "SELECT COALESCE(SUM(si.quantity), 0) AS qty FROM sale_items si "
             "JOIN sales s ON s.id = si.sale_id "
-            "WHERE si.item_variant_id = ? AND si.is_voided = 0 AND date(s.timestamp) = ?",
+            "WHERE si.item_variant_id = %s AND si.is_voided = 0 AND s.timestamp::date = %s::date",
             (item_variant_id, date),
         ).fetchone()
         return row["qty"]
     finally:
         conn.close()
+
 
 def ingredient_usage_rate(days: int = 7) -> pd.DataFrame:
     """Average daily consumption per ingredient over the trailing `days`,
@@ -203,15 +204,15 @@ def ingredient_usage_rate(days: int = 7) -> pd.DataFrame:
     return _df(
         """
         SELECT i.id, i.name, i.unit, i.current_stock, i.reorder_threshold,
-               COALESCE(SUM(si.quantity * r.quantity_used), 0) / ? AS avg_daily_usage
+               COALESCE(SUM(si.quantity * r.quantity_used), 0) / %s AS avg_daily_usage
         FROM ingredients i
         LEFT JOIN recipes r ON r.ingredient_id = i.id
         LEFT JOIN sale_items si ON si.item_variant_id = r.item_variant_id AND si.is_voided = 0
-        LEFT JOIN sales s ON s.id = si.sale_id AND date(s.timestamp) >= date('now', ?)
+        LEFT JOIN sales s ON s.id = si.sale_id AND s.timestamp::date >= CURRENT_DATE - %s
         GROUP BY i.id
         ORDER BY i.name
         """,
-        (days, f"-{days} days"),
+        (days, days),
     )
 
 
@@ -224,7 +225,7 @@ def wastage_log(start_date: str, end_date: str) -> pd.DataFrame:
         JOIN item_variants iv ON iv.id = w.item_variant_id
         JOIN menu_items mi ON mi.id = iv.menu_item_id
         JOIN users u ON u.id = w.logged_by_user_id
-        WHERE w.date BETWEEN ? AND ?
+        WHERE w.date BETWEEN %s AND %s
         ORDER BY w.date DESC
         """,
         (start_date, end_date),
@@ -241,7 +242,7 @@ def purchases_log(start_date: str, end_date: str) -> pd.DataFrame:
         SELECT p.date, i.name AS ingredient, p.supplier_name, p.quantity, i.unit, p.cost, u.username AS logged_by
         FROM purchases p JOIN ingredients i ON i.id = p.ingredient_id
         JOIN users u ON u.id = p.logged_by_user_id
-        WHERE p.date BETWEEN ? AND ?
+        WHERE p.date BETWEEN %s AND %s
         ORDER BY p.date DESC
         """,
         (start_date, end_date),
@@ -253,15 +254,15 @@ def profit_summary(start_date: str, end_date: str) -> dict:
     try:
         revenue = conn.execute(
             "SELECT COALESCE(SUM(total), 0) AS r, COALESCE(SUM(vat_amount), 0) AS vat "
-            "FROM sales WHERE date(timestamp) BETWEEN ? AND ?",
+            "FROM sales WHERE timestamp::date BETWEEN %s::date AND %s::date",
             (start_date, end_date),
         ).fetchone()
         purchase_cost = conn.execute(
-            "SELECT COALESCE(SUM(cost), 0) AS c FROM purchases WHERE date BETWEEN ? AND ?",
+            "SELECT COALESCE(SUM(cost), 0) AS c FROM purchases WHERE date BETWEEN %s AND %s",
             (start_date, end_date),
         ).fetchone()["c"]
         wastage_cost = conn.execute(
-            "SELECT COALESCE(SUM(value_lost), 0) AS v FROM wastage WHERE date BETWEEN ? AND ?",
+            "SELECT COALESCE(SUM(value_lost), 0) AS v FROM wastage WHERE date BETWEEN %s AND %s",
             (start_date, end_date),
         ).fetchone()["v"]
         return {
@@ -285,7 +286,7 @@ def reconciliation_history(start_date: str, end_date: str) -> pd.DataFrame:
         SELECT r.date, u.username AS staff, r.system_cash_total, r.counted_cash_total,
                r.discrepancy_amount, r.notes, r.created_at
         FROM reconciliation r JOIN users u ON u.id = r.staff_user_id
-        WHERE r.date BETWEEN ? AND ?
+        WHERE r.date BETWEEN %s AND %s
         ORDER BY r.date DESC, r.created_at DESC
         """,
         (start_date, end_date),
@@ -304,7 +305,7 @@ def all_staff() -> pd.DataFrame:
 
 def staff_login_history(user_id: int, limit: int = 50) -> pd.DataFrame:
     return _df(
-        "SELECT login_at, logout_at FROM sessions WHERE user_id = ? ORDER BY login_at DESC LIMIT ?",
+        "SELECT login_at, logout_at FROM sessions WHERE user_id = %s ORDER BY login_at DESC LIMIT %s",
         (user_id, limit),
     )
 
@@ -314,11 +315,12 @@ def staff_sales_performance(user_id: int, start_date: str, end_date: str) -> dic
     try:
         row = conn.execute(
             "SELECT COUNT(*) AS sale_count, COALESCE(SUM(total), 0) AS revenue "
-            "FROM sales WHERE staff_user_id = ? AND date(timestamp) BETWEEN ? AND ?",
+            "FROM sales WHERE staff_user_id = %s AND timestamp::date BETWEEN %s::date AND %s::date",
             (user_id, start_date, end_date),
         ).fetchone()
         voids = conn.execute(
-            "SELECT COUNT(*) AS c FROM sale_items WHERE voided_by = ? AND date(voided_at) BETWEEN ? AND ?",
+            "SELECT COUNT(*) AS c FROM sale_items WHERE voided_by = %s "
+            "AND voided_at::date BETWEEN %s::date AND %s::date",
             (user_id, start_date, end_date),
         ).fetchone()["c"]
         return {"sale_count": row["sale_count"], "revenue": row["revenue"], "voids_made": voids}
@@ -334,11 +336,11 @@ def audit_log(start_date: str, end_date: str, action_type: str | None = None) ->
     sql = (
         "SELECT a.timestamp, u.username, a.action_type, a.details "
         "FROM audit_log a JOIN users u ON u.id = a.user_id "
-        "WHERE date(a.timestamp) BETWEEN ? AND ?"
+        "WHERE a.timestamp::date BETWEEN %s::date AND %s::date"
     )
     params = [start_date, end_date]
     if action_type:
-        sql += " AND a.action_type = ?"
+        sql += " AND a.action_type = %s"
         params.append(action_type)
     sql += " ORDER BY a.timestamp DESC"
     return _df(sql, tuple(params))

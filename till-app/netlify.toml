@@ -1,0 +1,10 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[[redirects]]
+  # Single-page app: any route not matching a static file falls back to
+  # index.html so client-side routing/deep links don't 404 on refresh.
+  from = "/*"
+  to = "/index.html"
+  status = 200

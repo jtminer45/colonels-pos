@@ -5,14 +5,14 @@ This module is imported by BOTH the FastAPI till backend and the Streamlit
 manager dashboard, so a sale recorded from the till and a manual stock
 adjustment made from the dashboard go through the exact same code paths,
 constraints, and audit logging — there is no separate "sync" step because
-both surfaces read and write the same SQLite database via these functions.
+both surfaces read and write the same Postgres database via these functions.
 """
 
 from dataclasses import dataclass, field
 from typing import Optional
 
 from db import get_connection, now_iso, today_str, VAT_RATE
-from auth import require_role, require_manager, hash_new_password, generate_temp_password
+from auth import require_manager, hash_new_password, generate_temp_password
 from audit import log_action
 
 
@@ -39,7 +39,7 @@ def get_menu_tree(date: Optional[str] = None) -> list[dict]:
         for cat in categories:
             items = conn.execute(
                 "SELECT id, name, has_variants, base_photo_url FROM menu_items "
-                "WHERE category_id = ? AND active = 1 ORDER BY name",
+                "WHERE category_id = %s AND active = 1 ORDER BY name",
                 (cat["id"],),
             ).fetchall()
 
@@ -47,7 +47,7 @@ def get_menu_tree(date: Optional[str] = None) -> list[dict]:
             for item in items:
                 variants = conn.execute(
                     "SELECT id, variant_label, price FROM item_variants "
-                    "WHERE menu_item_id = ? AND active = 1 ORDER BY price",
+                    "WHERE menu_item_id = %s AND active = 1 ORDER BY price",
                     (item["id"],),
                 ).fetchall()
 
@@ -85,7 +85,7 @@ def _available_count(conn, item_variant_id: int, date: str) -> Optional[int]:
     """opening_count - sold (non-voided) - wasted, for that date. None if the
     variant has no inventory_daily row for the date (not stock-tracked today)."""
     row = conn.execute(
-        "SELECT opening_count FROM inventory_daily WHERE item_variant_id = ? AND date = ?",
+        "SELECT opening_count FROM inventory_daily WHERE item_variant_id = %s AND date = %s",
         (item_variant_id, date),
     ).fetchone()
     if row is None:
@@ -94,13 +94,13 @@ def _available_count(conn, item_variant_id: int, date: str) -> Optional[int]:
     sold = conn.execute(
         "SELECT COALESCE(SUM(si.quantity), 0) AS qty FROM sale_items si "
         "JOIN sales s ON s.id = si.sale_id "
-        "WHERE si.item_variant_id = ? AND si.is_voided = 0 AND date(s.timestamp) = ?",
+        "WHERE si.item_variant_id = %s AND si.is_voided = 0 AND s.timestamp::date = %s::date",
         (item_variant_id, date),
     ).fetchone()["qty"]
 
     wasted = conn.execute(
         "SELECT COALESCE(SUM(quantity), 0) AS qty FROM wastage "
-        "WHERE item_variant_id = ? AND date = ?",
+        "WHERE item_variant_id = %s AND date = %s",
         (item_variant_id, date),
     ).fetchone()["qty"]
 
@@ -114,8 +114,8 @@ def initialize_inventory_for_date(date: str, opening_counts: dict[int, int]) -> 
     try:
         for item_variant_id, count in opening_counts.items():
             conn.execute(
-                "INSERT OR IGNORE INTO inventory_daily (date, item_variant_id, opening_count) "
-                "VALUES (?, ?, ?)",
+                "INSERT INTO inventory_daily (date, item_variant_id, opening_count) "
+                "VALUES (%s, %s, %s) ON CONFLICT (date, item_variant_id) DO NOTHING",
                 (date, item_variant_id, count),
             )
         conn.commit()
@@ -127,7 +127,7 @@ def set_closing_count(date: str, item_variant_id: int, closing_count: int, user_
     conn = get_connection()
     try:
         conn.execute(
-            "UPDATE inventory_daily SET closing_count = ? WHERE date = ? AND item_variant_id = ?",
+            "UPDATE inventory_daily SET closing_count = %s WHERE date = %s AND item_variant_id = %s",
             (closing_count, date, item_variant_id),
         )
         log_action(conn, user_id, "INVENTORY_CLOSING_COUNT",
@@ -169,7 +169,7 @@ def record_sale(cart: list[CartLine], staff_user_id: int, payment_method: str) -
     conn = get_connection()
     try:
         staff_row = conn.execute(
-            "SELECT username FROM users WHERE id = ? AND active = 1", (staff_user_id,)
+            "SELECT username FROM users WHERE id = %s AND active = 1", (staff_user_id,)
         ).fetchone()
         if staff_row is None:
             raise ServiceError("Staff account is not valid or is inactive.")
@@ -183,7 +183,7 @@ def record_sale(cart: list[CartLine], staff_user_id: int, payment_method: str) -
             variant = conn.execute(
                 "SELECT iv.id, iv.price, iv.variant_label, mi.name AS item_name "
                 "FROM item_variants iv JOIN menu_items mi ON mi.id = iv.menu_item_id "
-                "WHERE iv.id = ? AND iv.active = 1",
+                "WHERE iv.id = %s AND iv.active = 1",
                 (line.item_variant_id,),
             ).fetchone()
             if variant is None:
@@ -209,18 +209,18 @@ def record_sale(cart: list[CartLine], staff_user_id: int, payment_method: str) -
 
         cur = conn.execute(
             "INSERT INTO sales (timestamp, staff_user_id, payment_method, subtotal, vat_amount, total) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
             (timestamp, staff_user_id, payment_method, subtotal, vat_amount, total),
         )
-        sale_id = cur.lastrowid
+        sale_id = cur.fetchone()["id"]
 
         for l in line_details:
             item_cur = conn.execute(
                 "INSERT INTO sale_items (sale_id, item_variant_id, quantity, unit_price) "
-                "VALUES (?, ?, ?, ?)",
+                "VALUES (%s, %s, %s, %s) RETURNING id",
                 (sale_id, l["item_variant_id"], l["quantity"], l["unit_price"]),
             )
-            l["sale_item_id"] = item_cur.lastrowid
+            l["sale_item_id"] = item_cur.fetchone()["id"]
             _deplete_ingredients(conn, l["item_variant_id"], l["quantity"])
 
         conn.commit()
@@ -241,12 +241,12 @@ def record_sale(cart: list[CartLine], staff_user_id: int, payment_method: str) -
 
 def _deplete_ingredients(conn, item_variant_id: int, quantity_sold: int) -> None:
     recipe_rows = conn.execute(
-        "SELECT ingredient_id, quantity_used FROM recipes WHERE item_variant_id = ?",
+        "SELECT ingredient_id, quantity_used FROM recipes WHERE item_variant_id = %s",
         (item_variant_id,),
     ).fetchall()
     for r in recipe_rows:
         conn.execute(
-            "UPDATE ingredients SET current_stock = MAX(0, current_stock - ?) WHERE id = ?",
+            "UPDATE ingredients SET current_stock = GREATEST(0, current_stock - %s) WHERE id = %s",
             (r["quantity_used"] * quantity_sold, r["ingredient_id"]),
         )
 
@@ -259,7 +259,7 @@ def void_sale_item(sale_item_id: int, user_id: int, reason: str) -> None:
     try:
         item = conn.execute(
             "SELECT si.*, s.subtotal, s.vat_amount, s.total, s.id AS sale_id "
-            "FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE si.id = ?",
+            "FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE si.id = %s",
             (sale_item_id,),
         ).fetchone()
         if item is None:
@@ -271,23 +271,23 @@ def void_sale_item(sale_item_id: int, user_id: int, reason: str) -> None:
         line_vat = round(line_total * VAT_RATE, 2)
 
         conn.execute(
-            "UPDATE sale_items SET is_voided = 1, voided_by = ?, void_reason = ?, voided_at = ? "
-            "WHERE id = ?",
+            "UPDATE sale_items SET is_voided = 1, voided_by = %s, void_reason = %s, voided_at = %s "
+            "WHERE id = %s",
             (user_id, reason, now_iso(), sale_item_id),
         )
         conn.execute(
-            "UPDATE sales SET subtotal = subtotal - ?, vat_amount = vat_amount - ?, "
-            "total = total - ? WHERE id = ?",
+            "UPDATE sales SET subtotal = subtotal - %s, vat_amount = vat_amount - %s, "
+            "total = total - %s WHERE id = %s",
             (line_total, line_vat, line_total + line_vat, item["sale_id"]),
         )
         # Return depleted ingredient stock for the voided item.
         recipe_rows = conn.execute(
-            "SELECT ingredient_id, quantity_used FROM recipes WHERE item_variant_id = ?",
+            "SELECT ingredient_id, quantity_used FROM recipes WHERE item_variant_id = %s",
             (item["item_variant_id"],),
         ).fetchall()
         for r in recipe_rows:
             conn.execute(
-                "UPDATE ingredients SET current_stock = current_stock + ? WHERE id = ?",
+                "UPDATE ingredients SET current_stock = current_stock + %s WHERE id = %s",
                 (r["quantity_used"] * item["quantity"], r["ingredient_id"]),
             )
 
@@ -305,7 +305,7 @@ def get_shift_summary(user_id: int, session_id: int) -> dict:
     conn = get_connection()
     try:
         session = conn.execute(
-            "SELECT login_at FROM sessions WHERE id = ? AND user_id = ?",
+            "SELECT login_at FROM sessions WHERE id = %s AND user_id = %s",
             (session_id, user_id),
         ).fetchone()
         if session is None:
@@ -313,7 +313,7 @@ def get_shift_summary(user_id: int, session_id: int) -> dict:
 
         row = conn.execute(
             "SELECT COUNT(*) AS sale_count, COALESCE(SUM(total), 0) AS total_sales "
-            "FROM sales WHERE staff_user_id = ? AND timestamp >= ?",
+            "FROM sales WHERE staff_user_id = %s AND timestamp >= %s",
             (user_id, session["login_at"]),
         ).fetchone()
         return {
@@ -337,17 +337,18 @@ def record_purchase(ingredient_id: int, supplier_name: str, quantity: float,
     try:
         cur = conn.execute(
             "INSERT INTO purchases (ingredient_id, supplier_name, quantity, cost, date, logged_by_user_id) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
             (ingredient_id, supplier_name, quantity, cost, date, user_id),
         )
+        purchase_id = cur.fetchone()["id"]
         conn.execute(
-            "UPDATE ingredients SET current_stock = current_stock + ? WHERE id = ?",
+            "UPDATE ingredients SET current_stock = current_stock + %s WHERE id = %s",
             (quantity, ingredient_id),
         )
         log_action(conn, user_id, "PURCHASE_LOGGED",
                    f"ingredient={ingredient_id} qty={quantity} cost={cost} supplier={supplier_name}")
         conn.commit()
-        return cur.lastrowid
+        return purchase_id
     finally:
         conn.close()
 
@@ -362,13 +363,14 @@ def record_wastage(item_variant_id: int, quantity: float, reason: str,
     try:
         cur = conn.execute(
             "INSERT INTO wastage (item_variant_id, quantity, reason, value_lost, date, logged_by_user_id) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
             (item_variant_id, quantity, reason, value_lost, date, user_id),
         )
+        wastage_id = cur.fetchone()["id"]
         log_action(conn, user_id, "WASTAGE_LOGGED",
                    f"variant={item_variant_id} qty={quantity} value_lost={value_lost} reason={reason}")
         conn.commit()
-        return cur.lastrowid
+        return wastage_id
     finally:
         conn.close()
 
@@ -383,7 +385,7 @@ def record_reconciliation(date: str, staff_user_id: int, counted_cash_total: flo
     try:
         system_cash_total = conn.execute(
             "SELECT COALESCE(SUM(total), 0) AS t FROM sales "
-            "WHERE payment_method = 'cash' AND date(timestamp) = ? AND staff_user_id = ?",
+            "WHERE payment_method = 'cash' AND timestamp::date = %s::date AND staff_user_id = %s",
             (date, staff_user_id),
         ).fetchone()["t"]
 
@@ -391,7 +393,7 @@ def record_reconciliation(date: str, staff_user_id: int, counted_cash_total: flo
 
         conn.execute(
             "INSERT INTO reconciliation (date, staff_user_id, system_cash_total, "
-            "counted_cash_total, discrepancy_amount, notes) VALUES (?, ?, ?, ?, ?, ?)",
+            "counted_cash_total, discrepancy_amount, notes) VALUES (%s, %s, %s, %s, %s, %s)",
             (date, staff_user_id, system_cash_total, counted_cash_total, discrepancy, notes),
         )
         if abs(discrepancy) > 0.01:
@@ -422,13 +424,13 @@ def create_staff_account(username: str, role: str, created_by_user_id: int) -> s
 
     conn = get_connection()
     try:
-        existing = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+        existing = conn.execute("SELECT id FROM users WHERE username = %s", (username,)).fetchone()
         if existing:
             raise ServiceError("A user with that username already exists.")
 
         conn.execute(
             "INSERT INTO users (username, password_hash, salt, role, active, must_change_password) "
-            "VALUES (?, ?, ?, ?, 1, 1)",
+            "VALUES (%s, %s, %s, %s, 1, 1)",
             (username, password_hash, salt, role),
         )
         log_action(conn, created_by_user_id, "STAFF_ACCOUNT_CREATED", f"username={username} role={role}")
@@ -442,7 +444,7 @@ def deactivate_staff(user_id: int, by_user_id: int) -> None:
     require_manager(by_user_id)
     conn = get_connection()
     try:
-        conn.execute("UPDATE users SET active = 0 WHERE id = ?", (user_id,))
+        conn.execute("UPDATE users SET active = 0 WHERE id = %s", (user_id,))
         log_action(conn, by_user_id, "STAFF_ACCOUNT_DEACTIVATED", f"user_id={user_id}")
         conn.commit()
     finally:
@@ -453,7 +455,7 @@ def reactivate_staff(user_id: int, by_user_id: int) -> None:
     require_manager(by_user_id)
     conn = get_connection()
     try:
-        conn.execute("UPDATE users SET active = 1 WHERE id = ?", (user_id,))
+        conn.execute("UPDATE users SET active = 1 WHERE id = %s", (user_id,))
         log_action(conn, by_user_id, "STAFF_ACCOUNT_REACTIVATED", f"user_id={user_id}")
         conn.commit()
     finally:
@@ -467,7 +469,7 @@ def reset_staff_password(user_id: int, by_user_id: int) -> str:
     conn = get_connection()
     try:
         conn.execute(
-            "UPDATE users SET password_hash = ?, salt = ?, must_change_password = 1 WHERE id = ?",
+            "UPDATE users SET password_hash = %s, salt = %s, must_change_password = 1 WHERE id = %s",
             (password_hash, salt, user_id),
         )
         log_action(conn, by_user_id, "STAFF_PASSWORD_RESET", f"user_id={user_id}")

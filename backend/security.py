@@ -19,6 +19,7 @@ the token.
 
 import hmac
 import hashlib
+import os
 import secrets
 from pathlib import Path
 
@@ -26,6 +27,15 @@ _SECRET_PATH = Path(__file__).resolve().parent / ".secret_key"
 
 
 def _load_or_create_secret() -> bytes:
+    # On Render (and most PaaS hosts) the filesystem is ephemeral — a key
+    # persisted only to a local file would be regenerated on every
+    # redeploy/restart, silently invalidating every logged-in session. Set
+    # SECRET_KEY as a real environment variable there (generate once,
+    # store it in the service's env vars) so it survives restarts.
+    env_key = os.environ.get("SECRET_KEY")
+    if env_key:
+        return bytes.fromhex(env_key)
+
     if _SECRET_PATH.exists():
         return bytes.fromhex(_SECRET_PATH.read_text().strip())
     key = secrets.token_hex(32)

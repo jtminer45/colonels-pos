@@ -1,3 +1,2 @@
-# No third-party dependencies — schema/auth/services use only the Python
-# standard library (sqlite3, hashlib, secrets, zoneinfo) by design, so the
-# database layer has zero install footprint on the till/dashboard machine.
+psycopg2-binary==2.9.10
+python-dotenv==1.0.1

@@ -94,7 +94,7 @@ with tab_daily:
         FROM inventory_daily idl
         JOIN item_variants iv ON iv.id = idl.item_variant_id
         JOIN menu_items mi ON mi.id = iv.menu_item_id
-        WHERE idl.date = ?
+        WHERE idl.date = %s
         ORDER BY mi.name, iv.variant_label
         """,
         (today_str(),),

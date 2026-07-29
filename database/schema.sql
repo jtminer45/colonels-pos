@@ -1,29 +1,28 @@
 -- Colonel's Bakery and Restaurant — POS & Management System
--- SQLite schema. Designed to move to a networked (Pi + LAN) deployment later
--- without structural changes — only the connection target changes, not this schema.
-
-PRAGMA foreign_keys = ON;
+-- PostgreSQL schema (migrated from an initial SQLite version — see git
+-- history for that variant, kept for local single-laptop deployments).
+-- Foreign keys are always enforced by Postgres; no PRAGMA needed.
 
 -- ============================================================
 -- USERS & SESSIONS
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS users (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    id              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     username        TEXT NOT NULL UNIQUE,
     password_hash   TEXT NOT NULL,      -- PBKDF2-SHA256 hex digest
     salt            TEXT NOT NULL,      -- unique random salt, hex, per user
     role            TEXT NOT NULL CHECK (role IN ('manager', 'staff')),
     active          INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
     must_change_password INTEGER NOT NULL DEFAULT 1 CHECK (must_change_password IN (0, 1)),
-    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now'))
+    created_at      TEXT NOT NULL DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD"T"HH24:MI:SS')
 );
 
 -- Deactivated staff are never deleted (active=0) so historical sales/audit rows
 -- keep a valid foreign key and remain attributable.
 
 CREATE TABLE IF NOT EXISTS sessions (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     login_at    TEXT NOT NULL,
     logout_at   TEXT
@@ -36,14 +35,14 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS categories (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name        TEXT NOT NULL UNIQUE,
     colour_hex  TEXT NOT NULL,
     sort_order  INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS menu_items (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    id              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     category_id     INTEGER NOT NULL REFERENCES categories(id) ON DELETE RESTRICT,
     name            TEXT NOT NULL,
     has_variants    INTEGER NOT NULL DEFAULT 0 CHECK (has_variants IN (0, 1)),
@@ -60,7 +59,7 @@ CREATE INDEX IF NOT EXISTS idx_menu_items_category ON menu_items(category_id);
 -- wastage) pointing at a single id type instead of juggling nullable
 -- menu_item_id / item_variant_id pairs everywhere.
 CREATE TABLE IF NOT EXISTS item_variants (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    id              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     menu_item_id    INTEGER NOT NULL REFERENCES menu_items(id) ON DELETE RESTRICT,
     variant_label   TEXT NOT NULL,      -- e.g. 'Small', 'Slice', 'Whole Cake', 'Standard'
     price           REAL NOT NULL CHECK (price >= 0),
@@ -75,7 +74,7 @@ CREATE INDEX IF NOT EXISTS idx_item_variants_menu_item ON item_variants(menu_ite
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS ingredients (
-    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    id                  INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name                TEXT NOT NULL UNIQUE,
     unit                TEXT NOT NULL,          -- e.g. 'kg', 'litre', 'unit'
     current_stock       REAL NOT NULL DEFAULT 0 CHECK (current_stock >= 0),
@@ -83,7 +82,7 @@ CREATE TABLE IF NOT EXISTS ingredients (
 );
 
 CREATE TABLE IF NOT EXISTS recipes (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    id              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     item_variant_id INTEGER NOT NULL REFERENCES item_variants(id) ON DELETE RESTRICT,
     ingredient_id   INTEGER NOT NULL REFERENCES ingredients(id) ON DELETE RESTRICT,
     quantity_used   REAL NOT NULL CHECK (quantity_used >= 0),
@@ -103,7 +102,7 @@ CREATE INDEX IF NOT EXISTS idx_recipes_ingredient ON recipes(ingredient_id);
 -- manager/staff stock take); closing_count is entered manually at day's end
 -- and compared against opening_count - sold to flag inventory mismatches.
 CREATE TABLE IF NOT EXISTS inventory_daily (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    id              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     date            TEXT NOT NULL,          -- 'YYYY-MM-DD'
     item_variant_id INTEGER NOT NULL REFERENCES item_variants(id) ON DELETE RESTRICT,
     opening_count   INTEGER NOT NULL DEFAULT 0 CHECK (opening_count >= 0),
@@ -118,7 +117,7 @@ CREATE INDEX IF NOT EXISTS idx_inventory_daily_date ON inventory_daily(date);
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS sales (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    id              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     timestamp       TEXT NOT NULL,
     staff_user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     payment_method  TEXT NOT NULL CHECK (payment_method IN ('cash', 'card')),
@@ -131,7 +130,7 @@ CREATE INDEX IF NOT EXISTS idx_sales_timestamp ON sales(timestamp);
 CREATE INDEX IF NOT EXISTS idx_sales_staff ON sales(staff_user_id);
 
 CREATE TABLE IF NOT EXISTS sale_items (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    id              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     sale_id         INTEGER NOT NULL REFERENCES sales(id) ON DELETE RESTRICT,
     item_variant_id INTEGER NOT NULL REFERENCES item_variants(id) ON DELETE RESTRICT,
     quantity        INTEGER NOT NULL CHECK (quantity > 0),
@@ -150,7 +149,7 @@ CREATE INDEX IF NOT EXISTS idx_sale_items_variant ON sale_items(item_variant_id)
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS purchases (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    id              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     ingredient_id   INTEGER NOT NULL REFERENCES ingredients(id) ON DELETE RESTRICT,
     supplier_name   TEXT,
     quantity        REAL NOT NULL CHECK (quantity > 0),
@@ -163,7 +162,7 @@ CREATE INDEX IF NOT EXISTS idx_purchases_ingredient ON purchases(ingredient_id);
 CREATE INDEX IF NOT EXISTS idx_purchases_date ON purchases(date);
 
 CREATE TABLE IF NOT EXISTS wastage (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    id              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     item_variant_id INTEGER NOT NULL REFERENCES item_variants(id) ON DELETE RESTRICT,
     quantity        REAL NOT NULL CHECK (quantity > 0),
     reason          TEXT NOT NULL,
@@ -179,14 +178,14 @@ CREATE INDEX IF NOT EXISTS idx_wastage_date ON wastage(date);
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS reconciliation (
-    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    id                      INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     date                    TEXT NOT NULL,
     staff_user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     system_cash_total       REAL NOT NULL CHECK (system_cash_total >= 0),
     counted_cash_total      REAL NOT NULL CHECK (counted_cash_total >= 0),
     discrepancy_amount      REAL NOT NULL,
     notes                   TEXT,
-    created_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now'))
+    created_at              TEXT NOT NULL DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD"T"HH24:MI:SS')
 );
 
 CREATE INDEX IF NOT EXISTS idx_reconciliation_date ON reconciliation(date);
@@ -197,7 +196,7 @@ CREATE INDEX IF NOT EXISTS idx_reconciliation_staff ON reconciliation(staff_user
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS audit_log (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    id              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     timestamp       TEXT NOT NULL,
     user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     action_type     TEXT NOT NULL,      -- e.g. 'VOID_SALE_ITEM', 'RESET_PASSWORD', 'STOCK_ADJUST'

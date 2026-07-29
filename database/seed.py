@@ -3,9 +3,9 @@ Seeds Colonel's Bakery and Restaurant's database with the starter menu,
 starter ingredients/recipes, today's opening inventory, and the first
 manager account.
 
-Safe to re-run: menu/ingredient/recipe inserts are idempotent (INSERT OR
-IGNORE against unique constraints); user accounts are only created if a
-username does not already exist. Run with:
+Safe to re-run: menu/ingredient/recipe inserts are idempotent (INSERT ...
+ON CONFLICT DO NOTHING against unique constraints); user accounts are only
+created if a username does not already exist. Run with:
 
     cd database && python3 seed.py
 """
@@ -143,7 +143,8 @@ def seed():
         # ---- categories ----
         for name, colour, sort_order in CATEGORIES:
             conn.execute(
-                "INSERT OR IGNORE INTO categories (name, colour_hex, sort_order) VALUES (?, ?, ?)",
+                "INSERT INTO categories (name, colour_hex, sort_order) VALUES (%s, %s, %s) "
+                "ON CONFLICT (name) DO NOTHING",
                 (name, colour, sort_order),
             )
         conn.commit()
@@ -160,25 +161,25 @@ def seed():
             for item_name, variants in items:
                 has_variants = 1 if (len(variants) > 1 or variants[0][0] != "Standard") else 0
                 conn.execute(
-                    "INSERT OR IGNORE INTO menu_items (category_id, name, has_variants, base_photo_url) "
-                    "VALUES (?, ?, ?, ?)",
+                    "INSERT INTO menu_items (category_id, name, has_variants, base_photo_url) "
+                    "VALUES (%s, %s, %s, %s) ON CONFLICT (category_id, name) DO NOTHING",
                     (cat_id, item_name, has_variants, photo),
                 )
                 conn.commit()
                 item_id = conn.execute(
-                    "SELECT id FROM menu_items WHERE category_id = ? AND name = ?",
+                    "SELECT id FROM menu_items WHERE category_id = %s AND name = %s",
                     (cat_id, item_name),
                 ).fetchone()["id"]
 
                 for label, price in variants:
                     conn.execute(
-                        "INSERT OR IGNORE INTO item_variants (menu_item_id, variant_label, price) "
-                        "VALUES (?, ?, ?)",
+                        "INSERT INTO item_variants (menu_item_id, variant_label, price) "
+                        "VALUES (%s, %s, %s) ON CONFLICT (menu_item_id, variant_label) DO NOTHING",
                         (item_id, label, price),
                     )
                     conn.commit()
                     v_id = conn.execute(
-                        "SELECT id FROM item_variants WHERE menu_item_id = ? AND variant_label = ?",
+                        "SELECT id FROM item_variants WHERE menu_item_id = %s AND variant_label = %s",
                         (item_id, label),
                     ).fetchone()["id"]
                     variant_ids[(item_name, label)] = v_id
@@ -186,8 +187,8 @@ def seed():
         # ---- ingredients ----
         for name, unit, stock, threshold in INGREDIENTS:
             conn.execute(
-                "INSERT OR IGNORE INTO ingredients (name, unit, current_stock, reorder_threshold) "
-                "VALUES (?, ?, ?, ?)",
+                "INSERT INTO ingredients (name, unit, current_stock, reorder_threshold) "
+                "VALUES (%s, %s, %s, %s) ON CONFLICT (name) DO NOTHING",
                 (name, unit, stock, threshold),
             )
         conn.commit()
@@ -201,8 +202,8 @@ def seed():
             v_id = variant_ids[(item_name, label)]
             for ing_name, qty in lines:
                 conn.execute(
-                    "INSERT OR IGNORE INTO recipes (item_variant_id, ingredient_id, quantity_used) "
-                    "VALUES (?, ?, ?)",
+                    "INSERT INTO recipes (item_variant_id, ingredient_id, quantity_used) "
+                    "VALUES (%s, %s, %s) ON CONFLICT (item_variant_id, ingredient_id) DO NOTHING",
                     (v_id, ingredient_ids[ing_name], qty),
                 )
         conn.commit()
@@ -211,8 +212,8 @@ def seed():
         date = today_str()
         for v_id in variant_ids.values():
             conn.execute(
-                "INSERT OR IGNORE INTO inventory_daily (date, item_variant_id, opening_count) "
-                "VALUES (?, ?, ?)",
+                "INSERT INTO inventory_daily (date, item_variant_id, opening_count) "
+                "VALUES (%s, %s, %s) ON CONFLICT (date, item_variant_id) DO NOTHING",
                 (date, v_id, DEFAULT_OPENING_COUNT),
             )
         conn.commit()
@@ -220,14 +221,14 @@ def seed():
         # ---- first manager account ----
         created_accounts = []
         for username, role in [("manager", "manager"), ("staff1", "staff")]:
-            existing = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+            existing = conn.execute("SELECT id FROM users WHERE username = %s", (username,)).fetchone()
             if existing:
                 continue
             temp_password = generate_temp_password()
             password_hash, salt = hash_new_password(temp_password)
             conn.execute(
                 "INSERT INTO users (username, password_hash, salt, role, active, must_change_password) "
-                "VALUES (?, ?, ?, ?, 1, 1)",
+                "VALUES (%s, %s, %s, %s, 1, 1)",
                 (username, password_hash, salt, role),
             )
             created_accounts.append((username, role, temp_password))

@@ -1,0 +1,37 @@
+databases:
+  - name: colonels-pos-db
+    plan: free
+    databaseName: colonels_pos
+    user: colonels_pos
+
+services:
+  - type: web
+    name: colonels-pos-backend
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: "pip install -r requirements.txt -r ../database/requirements.txt"
+    startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: colonels-pos-db
+          property: connectionString
+      - key: ALLOWED_ORIGINS
+        sync: false # set to the Netlify site URL(s) once known, comma-separated
+      - key: SECRET_KEY
+        generateValue: true # signs till API tokens; must stay stable across restarts
+
+  - type: web
+    name: colonels-pos-dashboard
+    runtime: python
+    plan: free
+    rootDir: dashboard
+    buildCommand: "pip install -r requirements.txt -r ../database/requirements.txt"
+    startCommand: "streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true --server.enableCORS false --server.enableXsrfProtection false"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: colonels-pos-db
+          property: connectionString

@@ -3,13 +3,11 @@ venv/
 __pycache__/
 *.pyc
 
-# Database (local runtime data — never commit real sales data)
-database/colonels_pos.db
-database/colonels_pos.db-wal
-database/colonels_pos.db-shm
-
 # Backend secrets
 backend/.secret_key
+.env
+till-app/.env
+till-app/.env.production
 
 # Node / till-app
 till-app/node_modules/

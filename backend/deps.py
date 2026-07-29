@@ -36,13 +36,13 @@ def get_current_user(authorization: str = Header(default="")) -> CurrentUser:
     conn = get_connection()
     try:
         session = conn.execute(
-            "SELECT user_id, logout_at FROM sessions WHERE id = ?", (session_id,)
+            "SELECT user_id, logout_at FROM sessions WHERE id = %s", (session_id,)
         ).fetchone()
         if session is None or session["logout_at"] is not None:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session has ended. Please log in again.")
 
         user = conn.execute(
-            "SELECT id, username, role, active FROM users WHERE id = ?", (session["user_id"],)
+            "SELECT id, username, role, active FROM users WHERE id = %s", (session["user_id"],)
         ).fetchone()
         if user is None or not user["active"]:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Account is inactive.")
