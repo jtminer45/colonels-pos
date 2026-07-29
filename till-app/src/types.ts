@@ -63,3 +63,37 @@ export interface ShiftSummary {
   sale_count: number;
   total_sales: number;
 }
+
+export type TableStatus = "empty" | "open" | "bill_requested" | "closed";
+
+export interface TableSummary {
+  id: number;
+  label: string;
+  status: TableStatus;
+  table_order_id: number | null;
+  opened_at: string | null;
+  running_total: number;
+  item_count: number;
+}
+
+export interface TableOrderLine {
+  table_order_item_id: number;
+  item_variant_id: number;
+  item_name: string;
+  variant_label: string;
+  quantity: number;
+  unit_price: number;
+  is_voided: boolean;
+}
+
+export interface TableOrderDetail {
+  table_order_id: number | null;
+  table_id: number;
+  table_label?: string;
+  status: TableStatus;
+  opened_at?: string | null;
+  items: TableOrderLine[];
+  subtotal: number;
+  vat_amount: number;
+  total: number;
+}

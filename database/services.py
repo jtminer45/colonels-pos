@@ -8,6 +8,7 @@ constraints, and audit logging — there is no separate "sync" step because
 both surfaces read and write the same Postgres database via these functions.
 """
 
+import os
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -18,6 +19,26 @@ from audit import log_action
 
 class ServiceError(Exception):
     """Raised for business-rule violations (insufficient stock, bad input, etc.)."""
+
+
+# Used as base_photo_url for a newly-created menu item that has no specific
+# photo uploaded yet — one generic bundled icon per category, shipped in
+# both assets/menu_photos/ and till-app/public/menu_photos/.
+CATEGORY_FALLBACK_PHOTOS = {
+    "Cakes": "cakes.svg",
+    "Bread": "bread.svg",
+    "Drinks": "drinks.svg",
+    "Ice Cream": "ice_cream.svg",
+    "Restaurant — Local Dishes": "local_dishes.svg",
+    "Restaurant — Intercontinental Dishes": "intercontinental_dishes.svg",
+    "Snacks & Pies": "pies.svg",
+}
+
+# Public URL of the backend, used to build an absolute photo URL
+# (PUBLIC_BACKEND_URL/photos/{item_id}) for manager-uploaded photos so the
+# dashboard (a different process/host) and the till app can both load them
+# directly in an <img>/st.image — no auth needed, it's just a food photo.
+PUBLIC_BACKEND_URL = os.environ.get("PUBLIC_BACKEND_URL", "http://localhost:8000")
 
 
 # ============================================================
@@ -104,7 +125,20 @@ def _available_count(conn, item_variant_id: int, date: str) -> Optional[int]:
         (item_variant_id, date),
     ).fetchone()["qty"]
 
-    return row["opening_count"] - sold - wasted
+    # Dine-in items reserve stock the moment they're added to a table's tab
+    # (the kitchen starts cooking then), not only once the bill is paid —
+    # otherwise a table's in-progress order wouldn't show up against
+    # availability at the counter, and both channels could oversell the
+    # same last few units of something.
+    table_reserved = conn.execute(
+        "SELECT COALESCE(SUM(toi.quantity), 0) AS qty FROM table_order_items toi "
+        "JOIN table_orders too ON too.id = toi.table_order_id "
+        "WHERE toi.item_variant_id = %s AND toi.is_voided = 0 AND too.status <> 'closed' "
+        "AND toi.added_at::date = %s::date",
+        (item_variant_id, date),
+    ).fetchone()["qty"]
+
+    return row["opening_count"] - sold - wasted - table_reserved
 
 
 def initialize_inventory_for_date(date: str, opening_counts: dict[int, int]) -> None:
@@ -162,7 +196,7 @@ class SaleReceipt:
 def record_sale(cart: list[CartLine], staff_user_id: int, payment_method: str) -> SaleReceipt:
     if not cart:
         raise ServiceError("Cannot record an empty sale.")
-    if payment_method not in ("cash", "card"):
+    if payment_method not in ("cash", "card", "transfer"):
         raise ServiceError("Invalid payment method.")
 
     date = today_str()
@@ -326,6 +360,314 @@ def get_shift_summary(user_id: int, session_id: int) -> dict:
 
 
 # ============================================================
+# DINE-IN TABLES — a running tab per table (table_orders/table_order_items)
+# that only becomes a `sales` record once the bill is actually paid
+# (checkout_table_order). Ingredient stock is depleted the moment an item
+# is added to a table's tab (see _deplete_ingredients calls below), not
+# deferred to payment — the kitchen is cooking it either way.
+# ============================================================
+
+def list_tables() -> list[dict]:
+    """All tables with their current open order summary, for the till's
+    table grid — status is 'empty' if nothing is open right now."""
+    conn = get_connection()
+    try:
+        tables = conn.execute(
+            "SELECT id, label, sort_order FROM restaurant_tables ORDER BY sort_order, label"
+        ).fetchall()
+        result = []
+        for t in tables:
+            order = conn.execute(
+                "SELECT id, status, opened_at FROM table_orders WHERE table_id = %s AND status <> 'closed'",
+                (t["id"],),
+            ).fetchone()
+            running_total = 0.0
+            item_count = 0
+            if order is not None:
+                totals = conn.execute(
+                    "SELECT COALESCE(SUM(quantity * unit_price), 0) AS total, COALESCE(SUM(quantity), 0) AS qty "
+                    "FROM table_order_items WHERE table_order_id = %s AND is_voided = 0",
+                    (order["id"],),
+                ).fetchone()
+                running_total = totals["total"]
+                item_count = totals["qty"]
+            result.append({
+                "id": t["id"],
+                "label": t["label"],
+                "status": order["status"] if order is not None else "empty",
+                "table_order_id": order["id"] if order is not None else None,
+                "opened_at": order["opened_at"] if order is not None else None,
+                "running_total": running_total,
+                "item_count": item_count,
+            })
+        return result
+    finally:
+        conn.close()
+
+
+def get_open_table_order_id(table_id: int) -> Optional[int]:
+    """The current non-closed order id for a table, or None if it's empty
+    right now. The till mostly thinks in terms of "table 5", not order ids —
+    this is how a route resolves one from the other."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT id FROM table_orders WHERE table_id = %s AND status <> 'closed'", (table_id,)
+        ).fetchone()
+        return row["id"] if row else None
+    finally:
+        conn.close()
+
+
+def get_table_order_detail(table_order_id: int) -> dict:
+    """Full itemized detail for one table's tab — used both to render the
+    till's per-table order screen and to render/print the pre-payment bill."""
+    conn = get_connection()
+    try:
+        order = conn.execute(
+            "SELECT too.*, rt.label AS table_label FROM table_orders too "
+            "JOIN restaurant_tables rt ON rt.id = too.table_id WHERE too.id = %s",
+            (table_order_id,),
+        ).fetchone()
+        if order is None:
+            raise ServiceError("Table order not found.")
+
+        items = conn.execute(
+            "SELECT toi.id AS table_order_item_id, toi.item_variant_id, toi.quantity, toi.unit_price, "
+            "toi.is_voided, mi.name AS item_name, iv.variant_label "
+            "FROM table_order_items toi "
+            "JOIN item_variants iv ON iv.id = toi.item_variant_id "
+            "JOIN menu_items mi ON mi.id = iv.menu_item_id "
+            "WHERE toi.table_order_id = %s ORDER BY toi.id",
+            (table_order_id,),
+        ).fetchall()
+
+        active = [dict(i) for i in items if not i["is_voided"]]
+        subtotal = sum(i["quantity"] * i["unit_price"] for i in active)
+        vat_amount = round(subtotal * VAT_RATE, 2)
+        total = round(subtotal + vat_amount, 2)
+
+        return {
+            "table_order_id": order["id"],
+            "table_id": order["table_id"],
+            "table_label": order["table_label"],
+            "status": order["status"],
+            "opened_at": order["opened_at"],
+            "items": [dict(i) for i in items],
+            "subtotal": subtotal,
+            "vat_amount": vat_amount,
+            "total": total,
+        }
+    finally:
+        conn.close()
+
+
+def add_item_to_table_order(table_id: int, item_variant_id: int, quantity: int, staff_user_id: int) -> int:
+    """Adds a line to the table's current open tab, opening one if this
+    table doesn't already have one. Validates availability and depletes
+    ingredient stock immediately, exactly like a counter sale does."""
+    if quantity <= 0:
+        raise ServiceError("Quantity must be positive.")
+
+    date = today_str()
+    conn = get_connection()
+    try:
+        table = conn.execute("SELECT label FROM restaurant_tables WHERE id = %s", (table_id,)).fetchone()
+        if table is None:
+            raise ServiceError("Table not found.")
+
+        order_row = conn.execute(
+            "SELECT id FROM table_orders WHERE table_id = %s AND status <> 'closed'", (table_id,)
+        ).fetchone()
+        if order_row is None:
+            cur = conn.execute(
+                "INSERT INTO table_orders (table_id, staff_user_id, opened_at, status) "
+                "VALUES (%s, %s, %s, 'open') RETURNING id",
+                (table_id, staff_user_id, now_iso()),
+            )
+            table_order_id = cur.fetchone()["id"]
+        else:
+            table_order_id = order_row["id"]
+
+        variant = conn.execute(
+            "SELECT iv.id, iv.price, iv.variant_label, mi.name AS item_name "
+            "FROM item_variants iv JOIN menu_items mi ON mi.id = iv.menu_item_id "
+            "WHERE iv.id = %s AND iv.active = 1",
+            (item_variant_id,),
+        ).fetchone()
+        if variant is None:
+            raise ServiceError("Item variant is not available.")
+
+        available = _available_count(conn, item_variant_id, date)
+        if available is not None and available < quantity:
+            raise ServiceError(f"{variant['item_name']} ({variant['variant_label']}) is sold out.")
+
+        cur = conn.execute(
+            "INSERT INTO table_order_items (table_order_id, item_variant_id, quantity, unit_price, "
+            "added_at, added_by_user_id) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            (table_order_id, item_variant_id, quantity, variant["price"], now_iso(), staff_user_id),
+        )
+        table_order_item_id = cur.fetchone()["id"]
+        _deplete_ingredients(conn, item_variant_id, quantity)
+
+        log_action(conn, staff_user_id, "TABLE_ORDER_ITEM_ADDED",
+                   f"table={table['label']} item={variant['item_name']} ({variant['variant_label']}) qty={quantity}")
+        conn.commit()
+        return table_order_item_id
+    finally:
+        conn.close()
+
+
+def void_table_order_item(table_order_item_id: int, user_id: int, reason: str) -> None:
+    """Voids an unpaid line before checkout (e.g. the kitchen got the order
+    wrong) — reason required and audit-logged, same as voiding a completed
+    sale. Restores the ingredient stock that was depleted when it was added."""
+    if not reason or not reason.strip():
+        raise ServiceError("A void reason is required.")
+
+    conn = get_connection()
+    try:
+        item = conn.execute(
+            "SELECT toi.*, too.table_id, rt.label AS table_label "
+            "FROM table_order_items toi "
+            "JOIN table_orders too ON too.id = toi.table_order_id "
+            "JOIN restaurant_tables rt ON rt.id = too.table_id "
+            "WHERE toi.id = %s",
+            (table_order_item_id,),
+        ).fetchone()
+        if item is None:
+            raise ServiceError("Item not found.")
+        if item["is_voided"]:
+            raise ServiceError("This item has already been voided.")
+
+        conn.execute(
+            "UPDATE table_order_items SET is_voided = 1, voided_by = %s, void_reason = %s, voided_at = %s "
+            "WHERE id = %s",
+            (user_id, reason, now_iso(), table_order_item_id),
+        )
+        recipe_rows = conn.execute(
+            "SELECT ingredient_id, quantity_used FROM recipes WHERE item_variant_id = %s",
+            (item["item_variant_id"],),
+        ).fetchall()
+        for r in recipe_rows:
+            conn.execute(
+                "UPDATE ingredients SET current_stock = current_stock + %s WHERE id = %s",
+                (r["quantity_used"] * item["quantity"], r["ingredient_id"]),
+            )
+
+        log_action(conn, user_id, "TABLE_ORDER_ITEM_VOIDED",
+                   f"table={item['table_label']} table_order_item={table_order_item_id} reason={reason}")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def request_table_bill(table_order_id: int, user_id: int) -> None:
+    """Marks a table as having asked for the bill — a status flag only
+    (printing the bill itself needs no DB write); doesn't close the tab, so
+    more items can still be added if the table orders something else."""
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE table_orders SET status = 'bill_requested' WHERE id = %s AND status <> 'closed'",
+            (table_order_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def checkout_table_order(table_order_id: int, payment_method: str, staff_user_id: int) -> SaleReceipt:
+    """Pays off a table's tab: turns its (non-voided) items into a real
+    `sales` + `sale_items` record — the same financial record a counter sale
+    produces, so it shows up identically in analytics/reconciliation — and
+    closes the table so it's free for the next customers. Does NOT deplete
+    ingredients again; that already happened when each item was ordered."""
+    if payment_method not in ("cash", "card", "transfer"):
+        raise ServiceError("Invalid payment method.")
+
+    conn = get_connection()
+    try:
+        order = conn.execute(
+            "SELECT too.*, rt.label AS table_label FROM table_orders too "
+            "JOIN restaurant_tables rt ON rt.id = too.table_id WHERE too.id = %s",
+            (table_order_id,),
+        ).fetchone()
+        if order is None:
+            raise ServiceError("Table order not found.")
+        if order["status"] == "closed":
+            raise ServiceError("This table has already been paid.")
+
+        items = conn.execute(
+            "SELECT toi.item_variant_id, toi.quantity, toi.unit_price, "
+            "mi.name AS item_name, iv.variant_label "
+            "FROM table_order_items toi "
+            "JOIN item_variants iv ON iv.id = toi.item_variant_id "
+            "JOIN menu_items mi ON mi.id = iv.menu_item_id "
+            "WHERE toi.table_order_id = %s AND toi.is_voided = 0",
+            (table_order_id,),
+        ).fetchall()
+        if not items:
+            raise ServiceError("Cannot check out a table with no items.")
+
+        staff_row = conn.execute(
+            "SELECT username FROM users WHERE id = %s AND active = 1", (staff_user_id,)
+        ).fetchone()
+        if staff_row is None:
+            raise ServiceError("Staff account is not valid or is inactive.")
+
+        subtotal = sum(i["quantity"] * i["unit_price"] for i in items)
+        vat_amount = round(subtotal * VAT_RATE, 2)
+        total = round(subtotal + vat_amount, 2)
+        timestamp = now_iso()
+
+        cur = conn.execute(
+            "INSERT INTO sales (timestamp, staff_user_id, payment_method, subtotal, vat_amount, total, table_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (timestamp, staff_user_id, payment_method, subtotal, vat_amount, total, order["table_id"]),
+        )
+        sale_id = cur.fetchone()["id"]
+
+        line_details = []
+        for i in items:
+            item_cur = conn.execute(
+                "INSERT INTO sale_items (sale_id, item_variant_id, quantity, unit_price) "
+                "VALUES (%s, %s, %s, %s) RETURNING id",
+                (sale_id, i["item_variant_id"], i["quantity"], i["unit_price"]),
+            )
+            line_details.append({
+                "sale_item_id": item_cur.fetchone()["id"],
+                "item_variant_id": i["item_variant_id"],
+                "item_name": i["item_name"],
+                "variant_label": i["variant_label"],
+                "quantity": i["quantity"],
+                "unit_price": i["unit_price"],
+                "line_total": i["quantity"] * i["unit_price"],
+            })
+
+        conn.execute(
+            "UPDATE table_orders SET status = 'closed', closed_at = %s, sale_id = %s WHERE id = %s",
+            (timestamp, sale_id, table_order_id),
+        )
+        log_action(conn, staff_user_id, "TABLE_CHECKOUT",
+                   f"table={order['table_label']} table_order={table_order_id} sale={sale_id} total={total}")
+        conn.commit()
+
+        return SaleReceipt(
+            sale_id=sale_id,
+            timestamp=timestamp,
+            staff_username=staff_row["username"],
+            payment_method=payment_method,
+            lines=line_details,
+            subtotal=subtotal,
+            vat_amount=vat_amount,
+            total=total,
+        )
+    finally:
+        conn.close()
+
+
+# ============================================================
 # PURCHASES & WASTAGE
 # ============================================================
 
@@ -475,5 +817,211 @@ def reset_staff_password(user_id: int, by_user_id: int) -> str:
         log_action(conn, by_user_id, "STAFF_PASSWORD_RESET", f"user_id={user_id}")
         conn.commit()
         return temp_password
+    finally:
+        conn.close()
+
+
+# ============================================================
+# MENU MANAGEMENT (manager only) — lets a manager add a seasonal item
+# (e.g. a Valentine's package, Christmas cookies) or a whole new category
+# straight from the dashboard, with no code change or redeploy needed.
+# Nothing here is ever hard-deleted: "removing" an item/variant/category
+# just deactivates it, so historical sales keep resolving correctly.
+# ============================================================
+
+def list_categories_admin() -> list[dict]:
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, name, colour_hex, sort_order FROM categories ORDER BY sort_order, name"
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def list_menu_items_admin(category_id: Optional[int] = None) -> list[dict]:
+    """All menu items (active AND inactive) with their variants, for the
+    management table — unlike get_menu_tree(), which only returns what the
+    till should show customers."""
+    conn = get_connection()
+    try:
+        sql = (
+            "SELECT mi.id, mi.name, mi.active, mi.has_variants, mi.base_photo_url, "
+            "c.id AS category_id, c.name AS category_name "
+            "FROM menu_items mi JOIN categories c ON c.id = mi.category_id"
+        )
+        params: tuple = ()
+        if category_id is not None:
+            sql += " WHERE mi.category_id = %s"
+            params = (category_id,)
+        sql += " ORDER BY c.sort_order, mi.name"
+        items = conn.execute(sql, params).fetchall()
+
+        result = []
+        for item in items:
+            variants = conn.execute(
+                "SELECT id, variant_label, price, active FROM item_variants "
+                "WHERE menu_item_id = %s ORDER BY price",
+                (item["id"],),
+            ).fetchall()
+            row = dict(item)
+            row["variants"] = [dict(v) for v in variants]
+            result.append(row)
+        return result
+    finally:
+        conn.close()
+
+
+def create_category(name: str, colour_hex: str, sort_order: int, created_by_user_id: int) -> int:
+    require_manager(created_by_user_id)
+    if not name.strip():
+        raise ServiceError("Category name is required.")
+    conn = get_connection()
+    try:
+        existing = conn.execute("SELECT id FROM categories WHERE name = %s", (name,)).fetchone()
+        if existing:
+            raise ServiceError("A category with that name already exists.")
+        cur = conn.execute(
+            "INSERT INTO categories (name, colour_hex, sort_order) VALUES (%s, %s, %s) RETURNING id",
+            (name.strip(), colour_hex, sort_order),
+        )
+        category_id = cur.fetchone()["id"]
+        log_action(conn, created_by_user_id, "CATEGORY_CREATED", f"name={name} colour={colour_hex}")
+        conn.commit()
+        return category_id
+    finally:
+        conn.close()
+
+
+def create_menu_item(
+    category_id: int,
+    name: str,
+    has_variants: bool,
+    created_by_user_id: int,
+    photo_bytes: Optional[bytes] = None,
+    photo_content_type: Optional[str] = None,
+) -> int:
+    require_manager(created_by_user_id)
+    if not name.strip():
+        raise ServiceError("Item name is required.")
+
+    conn = get_connection()
+    try:
+        category = conn.execute("SELECT name FROM categories WHERE id = %s", (category_id,)).fetchone()
+        if category is None:
+            raise ServiceError("Category not found.")
+
+        existing = conn.execute(
+            "SELECT id FROM menu_items WHERE category_id = %s AND name = %s", (category_id, name)
+        ).fetchone()
+        if existing:
+            raise ServiceError("An item with that name already exists in this category.")
+
+        # Photo comes later: create the row first (need its id for the photo
+        # URL), then attach the photo/URL in a second update.
+        cur = conn.execute(
+            "INSERT INTO menu_items (category_id, name, has_variants, base_photo_url) "
+            "VALUES (%s, %s, %s, %s) RETURNING id",
+            (category_id, name.strip(), 1 if has_variants else 0,
+             CATEGORY_FALLBACK_PHOTOS.get(category["name"], "cakes.svg")),
+        )
+        item_id = cur.fetchone()["id"]
+
+        if photo_bytes:
+            photo_url = f"{PUBLIC_BACKEND_URL}/photos/{item_id}"
+            conn.execute(
+                "UPDATE menu_items SET photo_blob = %s, photo_content_type = %s, base_photo_url = %s "
+                "WHERE id = %s",
+                (photo_bytes, photo_content_type, photo_url, item_id),
+            )
+
+        log_action(conn, created_by_user_id, "MENU_ITEM_CREATED",
+                   f"item={name} category={category['name']} photo={'uploaded' if photo_bytes else 'default'}")
+        conn.commit()
+        return item_id
+    finally:
+        conn.close()
+
+
+def get_item_photo(item_id: int) -> Optional[tuple[bytes, str]]:
+    """Returns (bytes, content_type) for a manager-uploaded photo, or None
+    if this item has no uploaded photo (e.g. it uses a bundled/static one)."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT photo_blob, photo_content_type FROM menu_items WHERE id = %s", (item_id,)
+        ).fetchone()
+        if row is None or row["photo_blob"] is None:
+            return None
+        return bytes(row["photo_blob"]), row["photo_content_type"] or "image/jpeg"
+    finally:
+        conn.close()
+
+
+def create_item_variant(menu_item_id: int, variant_label: str, price: float, created_by_user_id: int) -> int:
+    require_manager(created_by_user_id)
+    if not variant_label.strip():
+        raise ServiceError("Variant label is required.")
+    if price < 0:
+        raise ServiceError("Price cannot be negative.")
+
+    conn = get_connection()
+    try:
+        item = conn.execute("SELECT name FROM menu_items WHERE id = %s", (menu_item_id,)).fetchone()
+        if item is None:
+            raise ServiceError("Menu item not found.")
+
+        existing = conn.execute(
+            "SELECT id FROM item_variants WHERE menu_item_id = %s AND variant_label = %s",
+            (menu_item_id, variant_label),
+        ).fetchone()
+        if existing:
+            raise ServiceError("A variant with that label already exists for this item.")
+
+        cur = conn.execute(
+            "INSERT INTO item_variants (menu_item_id, variant_label, price) VALUES (%s, %s, %s) RETURNING id",
+            (menu_item_id, variant_label.strip(), price),
+        )
+        variant_id = cur.fetchone()["id"]
+        log_action(conn, created_by_user_id, "VARIANT_CREATED",
+                   f"item={item['name']} label={variant_label} price={price}")
+        conn.commit()
+        return variant_id
+    finally:
+        conn.close()
+
+
+def update_variant_price(variant_id: int, new_price: float, by_user_id: int) -> None:
+    require_manager(by_user_id)
+    if new_price < 0:
+        raise ServiceError("Price cannot be negative.")
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE item_variants SET price = %s WHERE id = %s", (new_price, variant_id))
+        log_action(conn, by_user_id, "VARIANT_PRICE_UPDATED", f"variant={variant_id} new_price={new_price}")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_menu_item_active(item_id: int, active: bool, by_user_id: int) -> None:
+    require_manager(by_user_id)
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE menu_items SET active = %s WHERE id = %s", (1 if active else 0, item_id))
+        log_action(conn, by_user_id, "MENU_ITEM_ACTIVE_CHANGED", f"item={item_id} active={active}")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_item_variant_active(variant_id: int, active: bool, by_user_id: int) -> None:
+    require_manager(by_user_id)
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE item_variants SET active = %s WHERE id = %s", (1 if active else 0, variant_id))
+        log_action(conn, by_user_id, "VARIANT_ACTIVE_CHANGED", f"variant={variant_id} active={active}")
+        conn.commit()
     finally:
         conn.close()

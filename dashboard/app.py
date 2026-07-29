@@ -3,9 +3,9 @@ Colonel's Bakery and Restaurant — Manager Dashboard entry point.
 
 Run with:  streamlit run app.py   (from inside the dashboard/ directory)
 
-This process talks directly to the shared SQLite database (see
+This process talks directly to the shared Postgres database (see
 database/db.py) — it does not go through the till's FastAPI backend. Both
-surfaces end up reading and writing the exact same database file.
+surfaces end up reading and writing the exact same database.
 """
 
 import sys
@@ -35,6 +35,7 @@ user = require_login()  # halts here (login form / forced password change) until
 pages = [
     st.Page("pages/snapshot.py", title="Today's Snapshot", icon="📊", default=True),
     st.Page("pages/sales_analytics.py", title="Sales Analytics", icon="📈"),
+    st.Page("pages/menu_management.py", title="Menu Management", icon="🍽️"),
     st.Page("pages/inventory.py", title="Inventory", icon="📦"),
     st.Page("pages/costs_purchases.py", title="Costs & Purchases", icon="💰"),
     st.Page("pages/reconciliation.py", title="Reconciliation", icon="🧾"),

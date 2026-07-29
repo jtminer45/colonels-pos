@@ -35,3 +35,6 @@ services:
         fromDatabase:
           name: colonels-pos-db
           property: connectionString
+      - key: PUBLIC_BACKEND_URL
+        sync: false # the backend service's own public URL, e.g. https://colonels-pos-backend.onrender.com
+                    # — the dashboard needs this to build a URL for a manager-uploaded item photo

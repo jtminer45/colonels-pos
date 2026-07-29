@@ -28,8 +28,8 @@ export default function VoidReasonModal({ itemLabel, onConfirm, onClose, submitt
               onClick={() => setReason(r)}
               className="tap-target w-full text-left rounded-xl border px-4 py-3"
               style={{
-                borderColor: reason === r ? "#FF3B30" : "rgba(255,255,255,0.1)",
-                backgroundColor: reason === r ? "rgba(255,59,48,0.15)" : "transparent",
+                borderColor: reason === r ? "#C61D24" : "rgba(255,255,255,0.1)",
+                backgroundColor: reason === r ? "rgba(198,29,36,0.15)" : "transparent",
               }}
             >
               {r}

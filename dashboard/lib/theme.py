@@ -12,9 +12,9 @@ import streamlit as st
 ASSETS_DIR = Path(__file__).resolve().parent.parent.parent / "assets"
 LOGO_PATH = ASSETS_DIR / "logo.png"
 
-PRIMARY = "#FF3B30"    # red — chef's hat accent
-BG_DARK = "#0A0A1A"    # navy/near-black background
-SURFACE = "#151527"
+PRIMARY = "#C61D24"    # red — matches the real logo
+BG_DARK = "#0A0A0A"    # navy/near-black background
+SURFACE = "#161616"
 TEXT_LIGHT = "#F5F5F7"
 
 
@@ -57,8 +57,8 @@ def inject_css() -> None:
             border-color: {PRIMARY};
         }}
         div[data-testid="stMetric"] {{
-            background-color: rgba(255, 59, 48, 0.06);
-            border: 1px solid rgba(255, 59, 48, 0.25);
+            background-color: rgba(198, 29, 36, 0.06);
+            border: 1px solid rgba(198, 29, 36, 0.25);
             border-radius: 10px;
             padding: 0.75rem 1rem;
         }}

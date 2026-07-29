@@ -50,7 +50,7 @@ if history.empty:
     st.info("No reconciliation records in this range.")
 else:
     def highlight_mismatch(row):
-        return ["background-color: rgba(255,59,48,0.15)" if abs(row["discrepancy_amount"]) > 0.01 else "" for _ in row]
+        return ["background-color: rgba(198,29,36,0.15)" if abs(row["discrepancy_amount"]) > 0.01 else "" for _ in row]
 
     st.dataframe(
         history.style.apply(highlight_mismatch, axis=1),

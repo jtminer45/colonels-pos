@@ -1,13 +1,19 @@
 """
-Seeds Colonel's Bakery and Restaurant's database with the starter menu,
-starter ingredients/recipes, today's opening inventory, and the first
-manager account.
+Seeds/curates Colonel's Bakery and Restaurant's database: the menu (with
+real per-item photos), starter ingredients/recipes, today's opening
+inventory, and the first manager account.
 
-Safe to re-run: menu/ingredient/recipe inserts are idempotent (INSERT ...
-ON CONFLICT DO NOTHING against unique constraints); user accounts are only
-created if a username does not already exist. Run with:
+Safe to re-run — and re-run on every backend boot (see backend/main.py):
+- Menu items/variants are upserted (ON CONFLICT ... DO UPDATE), so editing
+  MENU below and redeploying is how the curated menu/prices/photos reach
+  the live database — there is no separate manual migration step.
+- Items that exist in the database but are no longer listed in MENU are
+  deactivated (not deleted — historical sales referencing them must keep
+  resolving), so removing an item here removes it from the till/dashboard
+  without touching sales history.
+- User accounts are only created if a username does not already exist.
 
-    cd database && python3 seed.py
+Run manually with:  cd database && python3 seed.py
 """
 
 import sys
@@ -17,21 +23,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from db import get_connection, init_db, today_str
 from auth import hash_new_password, generate_temp_password
-
-# Bundled locally (assets/menu_photos/) rather than fetched from a stock-photo
-# API — the till app must work with zero internet dependency, so a remote
-# image URL would break offline use. Stored as bare filenames; each app (the
-# React PWA, the Streamlit dashboard) resolves the filename against its own
-# local copy of assets/menu_photos/.
-PLACEHOLDER_PHOTOS = {
-    "Cakes": "cakes.svg",
-    "Bread": "bread.svg",
-    "Drinks": "drinks.svg",
-    "Ice Cream": "ice_cream.svg",
-    "Restaurant — Local Dishes": "local_dishes.svg",
-    "Restaurant — Intercontinental Dishes": "intercontinental_dishes.svg",
-    "Snacks & Pies": "pies.svg",
-}
 
 CATEGORIES = [
     # name, colour_hex, sort_order
@@ -44,54 +35,85 @@ CATEGORIES = [
     ("Snacks & Pies", "#FB8C00", 7),
 ]
 
-# category_name -> [ (item_name, [(variant_label, price), ...]) ]
+# Prices below are deliberately generic placeholders (flat per category) —
+# the real menu photos came in before real pricing did. Update via the
+# dashboard's Menu Management page whenever real prices are ready; there is
+# no need to touch this file for a price change.
+CAKE_VARIANTS = [("Slice", 1500), ("Cupcake", 900), ("Whole Cake", 12000)]
+BREAD_VARIANTS = [("Small", 700), ("Large", 1400)]
+DRINK_VARIANTS = [("Small", 300), ("Medium", 500), ("Large", 700)]
+# Per-scoop price — quantity selected on the till IS the scoop count.
+ICE_CREAM_VARIANTS = [("Cup", 600), ("Cone", 650)]
+STANDARD_SNACK = [("Standard", 600)]
+STANDARD_LOCAL = [("Standard", 2000)]
+STANDARD_INTERCONTINENTAL = [("Standard", 3000)]
+
+# category_name -> [ (item_name, photo_filename, [(variant_label, price), ...]) ]
 MENU = {
     "Cakes": [
-        ("Chocolate Cake", [("Slice", 1800), ("Cupcake", 1000), ("Whole Cake", 14000)]),
-        ("Marble Cake", [("Slice", 1500), ("Cupcake", 900), ("Whole Cake", 11000)]),
-        ("Lemon Cake", [("Slice", 1600), ("Cupcake", 950), ("Whole Cake", 12500)]),
+        ("Chocolate Cake", "chocolate-cake.jpg", CAKE_VARIANTS),
+        ("Marble Cake", "marble-cake.jpg", CAKE_VARIANTS),
+        ("Lemon Cake", "lemon-cake.jpg", CAKE_VARIANTS),
+        ("Vanilla Cake", "vanilla-cake.jpg", CAKE_VARIANTS),
+        ("Red Velvet Cake", "red-velvet-cake.jpg", CAKE_VARIANTS),
     ],
     "Bread": [
-        ("Whole Bread", [("Small", 700), ("Large", 1400)]),
-        ("Butter Bread", [("Small", 800), ("Large", 1600)]),
-        ("French Bread", [("Small", 900), ("Large", 1800)]),
+        ("Butter Bread", "butter-bread.jpg", BREAD_VARIANTS),
+        ("French Bread", "french-bread.jpg", BREAD_VARIANTS),
+        ("Coconut Bread", "coconut-bread.jpg", BREAD_VARIANTS),
+        ("Plain Bread", "plain-bread.jpg", BREAD_VARIANTS),
+        ("Burger Buns", "burger-buns.jpg", BREAD_VARIANTS),
     ],
+    # Cup/Cone is the container choice; price is PER SCOOP — the quantity
+    # the customer picks on the till/table order IS the scoop count (e.g.
+    # 3x "Vanilla — Cup" = 3 scoops in one cup, priced per scoop).
     "Ice Cream": [
-        ("Vanilla", [("Standard", 600)]),
-        ("Chocolate", [("Standard", 600)]),
-        ("Strawberry", [("Standard", 650)]),
-        ("Mint", [("Standard", 650)]),
-        ("Cookies & Cream", [("Standard", 700)]),
+        ("Vanilla", "vanilla-ice-cream.jpg", ICE_CREAM_VARIANTS),
+        ("Chocolate", "chocolate-ice-cream.jpg", ICE_CREAM_VARIANTS),
+        ("Strawberry", "strawberry-ice-cream.jpg", ICE_CREAM_VARIANTS),
+        ("Bubble Gum", "bubble-gum-ice-cream.jpg", ICE_CREAM_VARIANTS),
     ],
     "Drinks": [
-        ("Coca-Cola", [("Small", 300), ("Medium", 500), ("Large", 700)]),
-        ("Sprite", [("Small", 300), ("Medium", 500), ("Large", 700)]),
-        ("Fanta", [("Small", 300), ("Medium", 500), ("Large", 700)]),
-        ("Fura da Nono", [("Small", 400), ("Medium", 600), ("Large", 800)]),
-        ("Water", [("Small", 150), ("Medium", 250), ("Large", 400)]),
-        ("Zobo", [("Small", 300), ("Medium", 450), ("Large", 600)]),
-    ],
-    "Restaurant — Local Dishes": [
-        ("Jollof Rice", [("Standard", 1800)]),
-        ("Fried Rice", [("Standard", 1900)]),
-        ("Egusi Soup", [("Standard", 2200)]),
-        ("Efo Riro", [("Standard", 2000)]),
-        ("Pounded Yam", [("Standard", 1800)]),
-        ("Suya", [("Standard", 2500)]),
-        ("Pepper Soup", [("Standard", 2200)]),
-        ("Amala", [("Standard", 1700)]),
-    ],
-    "Restaurant — Intercontinental Dishes": [
-        ("Grilled Chicken", [("Standard", 3200)]),
-        ("Pasta Bolognese", [("Standard", 2800)]),
-        ("Burger & Chips", [("Standard", 3000)]),
-        ("Pizza", [("Standard", 4500)]),
-        ("Steak", [("Standard", 5000)]),
-        ("Caesar Salad", [("Standard", 2500)]),
+        ("Coca-Cola", "coca-cola.jpg", DRINK_VARIANTS),
+        ("Fanta", "fanta.jpg", DRINK_VARIANTS),
+        ("Sprite", "sprite.jpg", DRINK_VARIANTS),
+        ("Fura da Nono", "fura-da-nono.jpg", DRINK_VARIANTS),
+        ("Water", "water.jpg", DRINK_VARIANTS),
+        ("Zobo", "zobo.jpg", DRINK_VARIANTS),
+        ("Coffee", "coffee.jpg", DRINK_VARIANTS),
+        ("Tea", "tea.jpg", DRINK_VARIANTS),
     ],
     "Snacks & Pies": [
-        ("Meat Pie", [("Standard", 500)]),
-        ("Chicken Pie", [("Standard", 600)]),
+        ("Meat Pie", "meat-pie.jpg", STANDARD_SNACK),
+        ("Chicken Pie", "chicken-pie.jpg", STANDARD_SNACK),
+        ("Jam Doughnuts", "jam-doughnuts.jpg", STANDARD_SNACK),
+        ("Plain Doughnut", "plain-doughnut.jpg", STANDARD_SNACK),
+        ("Samosa", "samosa.jpg", STANDARD_SNACK),
+        ("Spring Rolls", "spring-rolls.jpg", STANDARD_SNACK),
+        ("Cinnamon Rolls", "cinnamon-rolls.jpg", STANDARD_SNACK),
+    ],
+    "Restaurant — Local Dishes": [
+        ("Jollof Rice", "jollof-rice.jpg", STANDARD_LOCAL),
+        ("Fried Rice", "fried-rice.jpg", STANDARD_LOCAL),
+        ("White Rice", "white-rice.jpg", STANDARD_LOCAL),
+        ("Egusi Soup", "egusi-soup.jpg", STANDARD_LOCAL),
+        ("Okra Soup", "okra-soup.jpg", STANDARD_LOCAL),
+        ("Amala", "amala.jpg", STANDARD_LOCAL),
+        ("Liver Sauce", "liver-sauce.jpg", STANDARD_LOCAL),
+        ("Stew", "stew.jpg", STANDARD_LOCAL),
+        ("Cow Meat", "cow-meat.jpg", STANDARD_LOCAL),
+        ("Goat Meat", "goat-meat.jpg", STANDARD_LOCAL),
+        ("Fried Chicken", "fried-chicken.jpg", STANDARD_LOCAL),
+        ("Potatoes", "potatoes.jpg", STANDARD_LOCAL),
+        ("Chips", "chips.jpg", STANDARD_LOCAL),
+    ],
+    "Restaurant — Intercontinental Dishes": [
+        ("Grilled Chicken", "grilled-chicken.jpg", STANDARD_INTERCONTINENTAL),
+        ("Pasta Bolognese", "pasta-bolognese.jpg", STANDARD_INTERCONTINENTAL),
+        ("Burger & Chips", "burger-and-chips.jpg", STANDARD_INTERCONTINENTAL),
+        ("Cheese Burger", "cheese-burger.jpg", STANDARD_INTERCONTINENTAL),
+        ("Caesar Salad", "caesar-salad.jpg", STANDARD_INTERCONTINENTAL),
+        ("Shawarma", "shawarma.jpg", STANDARD_INTERCONTINENTAL),
     ],
 }
 
@@ -123,17 +145,21 @@ RECIPES = {
     ("Chocolate Cake", "Slice"): [("Flour", 0.08), ("Sugar", 0.05), ("Butter", 0.03), ("Eggs", 0.5), ("Cocoa Powder", 0.02)],
     ("Chocolate Cake", "Cupcake"): [("Flour", 0.05), ("Sugar", 0.03), ("Butter", 0.02), ("Eggs", 0.3), ("Cocoa Powder", 0.01)],
     ("Chocolate Cake", "Whole Cake"): [("Flour", 1.2), ("Sugar", 0.8), ("Butter", 0.6), ("Eggs", 8), ("Cocoa Powder", 0.3)],
-    ("Whole Bread", "Small"): [("Flour", 0.4), ("Yeast", 0.01), ("Butter", 0.02)],
-    ("Whole Bread", "Large"): [("Flour", 0.8), ("Yeast", 0.02), ("Butter", 0.04)],
+    ("Plain Bread", "Small"): [("Flour", 0.4), ("Yeast", 0.01), ("Butter", 0.02)],
+    ("Plain Bread", "Large"): [("Flour", 0.8), ("Yeast", 0.02), ("Butter", 0.04)],
     ("Meat Pie", "Standard"): [("Flour", 0.1), ("Butter", 0.03), ("Beef", 0.08), ("Onion", 0.02)],
     ("Chicken Pie", "Standard"): [("Flour", 0.1), ("Butter", 0.03), ("Chicken", 0.08), ("Onion", 0.02)],
-    ("Vanilla", "Standard"): [("Cream", 0.1), ("Milk", 0.05), ("Sugar", 0.03), ("Vanilla Extract", 0.005)],
+    # Per scoop, regardless of cup or cone.
+    ("Vanilla", "Cup"): [("Cream", 0.1), ("Milk", 0.05), ("Sugar", 0.03), ("Vanilla Extract", 0.005)],
+    ("Vanilla", "Cone"): [("Cream", 0.1), ("Milk", 0.05), ("Sugar", 0.03), ("Vanilla Extract", 0.005)],
     ("Jollof Rice", "Standard"): [("Rice", 0.25), ("Tomato", 0.15), ("Cooking Oil", 0.03), ("Chicken", 0.1)],
     ("Grilled Chicken", "Standard"): [("Chicken", 0.3), ("Cooking Oil", 0.02), ("Onion", 0.02)],
 }
 
 # Reasonable opening stock counts for day one, keyed by (item_name, variant_label).
 DEFAULT_OPENING_COUNT = 20
+
+NUM_TABLES = 10
 
 
 def seed():
@@ -153,16 +179,19 @@ def seed():
             for row in conn.execute("SELECT id, name FROM categories").fetchall()
         }
 
-        # ---- menu items + variants ----
+        # ---- menu items + variants (upsert: editing MENU above and
+        # redeploying is how photo/price changes reach the live database) ----
         variant_ids: dict[tuple[str, str], int] = {}
+        kept_item_ids: set[int] = set()
         for cat_name, items in MENU.items():
             cat_id = category_ids[cat_name]
-            photo = PLACEHOLDER_PHOTOS.get(cat_name)
-            for item_name, variants in items:
+            for item_name, photo, variants in items:
                 has_variants = 1 if (len(variants) > 1 or variants[0][0] != "Standard") else 0
                 conn.execute(
-                    "INSERT INTO menu_items (category_id, name, has_variants, base_photo_url) "
-                    "VALUES (%s, %s, %s, %s) ON CONFLICT (category_id, name) DO NOTHING",
+                    "INSERT INTO menu_items (category_id, name, has_variants, base_photo_url, active) "
+                    "VALUES (%s, %s, %s, %s, 1) "
+                    "ON CONFLICT (category_id, name) DO UPDATE SET "
+                    "has_variants = EXCLUDED.has_variants, base_photo_url = EXCLUDED.base_photo_url, active = 1",
                     (cat_id, item_name, has_variants, photo),
                 )
                 conn.commit()
@@ -170,11 +199,14 @@ def seed():
                     "SELECT id FROM menu_items WHERE category_id = %s AND name = %s",
                     (cat_id, item_name),
                 ).fetchone()["id"]
+                kept_item_ids.add(item_id)
 
                 for label, price in variants:
                     conn.execute(
-                        "INSERT INTO item_variants (menu_item_id, variant_label, price) "
-                        "VALUES (%s, %s, %s) ON CONFLICT (menu_item_id, variant_label) DO NOTHING",
+                        "INSERT INTO item_variants (menu_item_id, variant_label, price, active) "
+                        "VALUES (%s, %s, %s, 1) "
+                        "ON CONFLICT (menu_item_id, variant_label) DO UPDATE SET "
+                        "price = EXCLUDED.price, active = 1",
                         (item_id, label, price),
                     )
                     conn.commit()
@@ -183,6 +215,27 @@ def seed():
                         (item_id, label),
                     ).fetchone()["id"]
                     variant_ids[(item_name, label)] = v_id
+
+        # ---- deactivate items no longer listed in MENU (never hard-deleted —
+        # historical sales must keep resolving to a valid item_variant) ----
+        all_category_ids = tuple(category_ids.values())
+        existing_items = conn.execute(
+            "SELECT id FROM menu_items WHERE category_id = ANY(%s)", (list(all_category_ids),)
+        ).fetchall()
+        stale_item_ids = [row["id"] for row in existing_items if row["id"] not in kept_item_ids]
+        for item_id in stale_item_ids:
+            conn.execute("UPDATE menu_items SET active = 0 WHERE id = %s", (item_id,))
+            conn.execute("UPDATE item_variants SET active = 0 WHERE menu_item_id = %s", (item_id,))
+        conn.commit()
+
+        # ---- restaurant tables ----
+        for i in range(1, NUM_TABLES + 1):
+            conn.execute(
+                "INSERT INTO restaurant_tables (label, sort_order) VALUES (%s, %s) "
+                "ON CONFLICT (label) DO NOTHING",
+                (f"Table {i}", i),
+            )
+        conn.commit()
 
         # ---- ingredients ----
         for name, unit, stock, threshold in INGREDIENTS:
@@ -236,10 +289,11 @@ def seed():
 
         print("Seed complete.")
         print(f"  Categories: {len(CATEGORIES)}")
-        print(f"  Menu items: {sum(len(v) for v in MENU.values())}")
+        print(f"  Menu items: {sum(len(v) for v in MENU.values())} ({len(stale_item_ids)} deactivated)")
         print(f"  Item variants: {len(variant_ids)}")
         print(f"  Ingredients: {len(INGREDIENTS)}")
         print(f"  Recipes: {sum(len(v) for v in RECIPES.values())}")
+        print(f"  Restaurant tables: {NUM_TABLES}")
         if created_accounts:
             print("\n  NEW LOGIN CREDENTIALS (save these now — passwords are never stored in "
                   "recoverable form, only as one-way hashes):")

@@ -30,3 +30,12 @@ class SaleRequest(BaseModel):
 
 class VoidRequest(BaseModel):
     reason: str = Field(min_length=1)
+
+
+class AddTableItemRequest(BaseModel):
+    item_variant_id: int
+    quantity: int = Field(gt=0)
+
+
+class TableCheckoutRequest(BaseModel):
+    payment_method: str  # 'cash' | 'card'

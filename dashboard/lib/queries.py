@@ -27,6 +27,7 @@ def todays_totals(date: str) -> dict:
             "SELECT COALESCE(SUM(total), 0) AS revenue, COALESCE(SUM(vat_amount), 0) AS vat, "
             "COALESCE(SUM(CASE WHEN payment_method='cash' THEN total ELSE 0 END), 0) AS cash, "
             "COALESCE(SUM(CASE WHEN payment_method='card' THEN total ELSE 0 END), 0) AS card, "
+            "COALESCE(SUM(CASE WHEN payment_method='transfer' THEN total ELSE 0 END), 0) AS transfer, "
             "COUNT(*) AS sale_count "
             "FROM sales WHERE timestamp::date = %s::date",
             (date,),
@@ -52,6 +53,7 @@ def todays_totals(date: str) -> dict:
             "vat": row["vat"],
             "cash": row["cash"],
             "card": row["card"],
+            "transfer": row["transfer"],
             "sale_count": row["sale_count"],
             "ingredient_cost": ingredient_cost,
             "wastage_value": wastage_value,
@@ -59,6 +61,21 @@ def todays_totals(date: str) -> dict:
         }
     finally:
         conn.close()
+
+
+def payment_method_breakdown(start_date: str, end_date: str) -> pd.DataFrame:
+    """Transaction count + total per payment method (cash/card/transfer) for
+    a date range — used for both a single day and a full month view."""
+    return _df(
+        """
+        SELECT payment_method, COUNT(*) AS transaction_count, COALESCE(SUM(total), 0) AS total_amount
+        FROM sales
+        WHERE timestamp::date BETWEEN %s::date AND %s::date
+        GROUP BY payment_method
+        ORDER BY payment_method
+        """,
+        (start_date, end_date),
+    )
 
 
 def reconciliation_mismatches(date: str) -> pd.DataFrame:

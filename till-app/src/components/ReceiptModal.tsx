@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Receipt, SaleLineResult } from "../types";
-import { formatNaira } from "../lib/format";
+import { formatNaira, paymentMethodLabel } from "../lib/format";
 import { api, ApiError } from "../api/client";
 import VoidReasonModal from "./VoidReasonModal";
 
@@ -59,7 +59,7 @@ export default function ReceiptModal({ receipt, onDone }: Props) {
             <h2 className="font-bold text-lg">Colonel's Bakery &amp; Restaurant</h2>
             <p className="text-xs text-white/50 print:text-black">Sale #{receipt.sale_id} · {receipt.timestamp}</p>
             <p className="text-xs text-white/50 print:text-black">
-              Served by {receipt.staff_username} · {receipt.payment_method.toUpperCase()}
+              Served by {receipt.staff_username} · {paymentMethodLabel(receipt.payment_method)}
             </p>
           </div>
 

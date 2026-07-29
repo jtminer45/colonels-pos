@@ -1,22 +1,26 @@
 import { useState } from "react";
-import { useAuth } from "../contexts/AuthContext";
 import { useCart } from "../contexts/CartContext";
 import { useMenu } from "../hooks/useMenu";
 import { useShiftSummary } from "../hooks/useShiftSummary";
+import { api } from "../api/client";
+import AppHeader, { type AppMode } from "../components/AppHeader";
 import CategoryTile from "../components/CategoryTile";
 import ItemTile from "../components/ItemTile";
 import VariantSheet from "../components/VariantSheet";
 import CartPanel from "../components/CartPanel";
-import CheckoutModal from "../components/CheckoutModal";
+import CheckoutModal, { type PaymentMethod } from "../components/CheckoutModal";
 import ReceiptModal from "../components/ReceiptModal";
-import { formatNaira } from "../lib/format";
 import type { MenuItem, Receipt } from "../types";
 
-export default function TillPage() {
-  const { user, logout } = useAuth();
+interface Props {
+  mode: AppMode;
+  onModeChange: (mode: AppMode) => void;
+}
+
+export default function TillPage({ mode, onModeChange }: Props) {
   const { categories, loading, error, refetch } = useMenu();
-  const { summary, refetch: refetchShift } = useShiftSummary();
-  const { addLine, clear } = useCart();
+  const { refetch: refetchShift } = useShiftSummary();
+  const { lines, subtotal, vatAmount, total, addLine, clear } = useCart();
 
   const [activeCategoryId, setActiveCategoryId] = useState<number | null>(null);
   const [variantSheetItem, setVariantSheetItem] = useState<MenuItem | null>(null);
@@ -31,10 +35,17 @@ export default function TillPage() {
     addLine({ itemVariantId: v.id, itemName: item.name, variantLabel: v.variant_label, unitPrice: v.price });
   }
 
-  function handlePickVariant(variantId: number, variantLabel: string, price: number) {
+  function handlePickVariant(variantId: number, variantLabel: string, price: number, quantity: number) {
     if (!variantSheetItem) return;
-    addLine({ itemVariantId: variantId, itemName: variantSheetItem.name, variantLabel, unitPrice: price });
+    addLine({ itemVariantId: variantId, itemName: variantSheetItem.name, variantLabel, unitPrice: price }, quantity);
     setVariantSheetItem(null);
+  }
+
+  async function handleConfirmSale(method: PaymentMethod): Promise<Receipt> {
+    return api.createSale(
+      lines.map((l) => ({ item_variant_id: l.itemVariantId, quantity: l.quantity })),
+      method
+    );
   }
 
   async function handleSaleSuccess(r: Receipt) {
@@ -49,37 +60,9 @@ export default function TillPage() {
     setReceipt(null);
   }
 
-  async function handleClockOut() {
-    if (!confirm("Clock out and end this shift?")) return;
-    await logout();
-  }
-
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden">
-      <header className="flex items-center justify-between px-4 py-3 bg-brand-surface border-b border-white/10 shrink-0">
-        <div className="flex items-center gap-3">
-          <img src="/logo.png" alt="" className="w-9 h-9 rounded-lg" />
-          <div>
-            <div className="font-semibold text-sm leading-tight">Colonel's Bakery &amp; Restaurant</div>
-            <div className="text-xs text-white/40">{user?.username}</div>
-          </div>
-        </div>
-        <div className="flex items-center gap-4">
-          <div className="text-right">
-            <div className="text-xs text-white/40">This Shift</div>
-            <div className="font-semibold">
-              {summary ? formatNaira(summary.total_sales) : "—"}
-              <span className="text-white/40 font-normal"> · {summary?.sale_count ?? 0} sales</span>
-            </div>
-          </div>
-          <button
-            onClick={handleClockOut}
-            className="tap-target rounded-xl border border-brand-red text-brand-red px-4 py-2 text-sm font-semibold"
-          >
-            Clock Out
-          </button>
-        </div>
-      </header>
+      <AppHeader mode={mode} onModeChange={onModeChange} />
 
       {error && (
         <div className="bg-brand-red/15 text-brand-red text-sm px-4 py-2 flex items-center justify-between">
@@ -128,7 +111,16 @@ export default function TillPage() {
       {variantSheetItem && (
         <VariantSheet item={variantSheetItem} onPick={handlePickVariant} onClose={() => setVariantSheetItem(null)} />
       )}
-      {checkoutOpen && <CheckoutModal onClose={() => setCheckoutOpen(false)} onSuccess={handleSaleSuccess} />}
+      {checkoutOpen && (
+        <CheckoutModal
+          subtotal={subtotal}
+          vatAmount={vatAmount}
+          total={total}
+          onConfirm={handleConfirmSale}
+          onClose={() => setCheckoutOpen(false)}
+          onSuccess={handleSaleSuccess}
+        />
+      )}
       {receipt && <ReceiptModal receipt={receipt} onDone={handleReceiptDone} />}
     </div>
   );

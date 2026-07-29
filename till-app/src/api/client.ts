@@ -1,4 +1,4 @@
-import type { Category, Receipt, ShiftSummary } from "../types";
+import type { Category, Receipt, ShiftSummary, TableSummary, TableOrderDetail } from "../types";
 
 // Same laptop today (http://localhost:8000). When this moves to a Raspberry
 // Pi serving multiple tablets over LAN, only this one value changes — set
@@ -81,7 +81,7 @@ export const api = {
 
   getMenu: () => request<Category[]>("/menu"),
 
-  createSale: (cart: { item_variant_id: number; quantity: number }[], payment_method: "cash" | "card") =>
+  createSale: (cart: { item_variant_id: number; quantity: number }[], payment_method: "cash" | "card" | "transfer") =>
     request<Receipt>("/sales", {
       method: "POST",
       body: JSON.stringify({ cart, payment_method }),
@@ -94,4 +94,29 @@ export const api = {
     }),
 
   shiftSummary: () => request<ShiftSummary>("/sales/shift-summary"),
+
+  listTables: () => request<TableSummary[]>("/tables"),
+
+  getTableOrder: (tableId: number) => request<TableOrderDetail>(`/tables/${tableId}/order`),
+
+  addTableItem: (tableId: number, item_variant_id: number, quantity: number) =>
+    request<{ table_order_item_id: number }>(`/tables/${tableId}/items`, {
+      method: "POST",
+      body: JSON.stringify({ item_variant_id, quantity }),
+    }),
+
+  voidTableItem: (tableOrderItemId: number, reason: string) =>
+    request<{ ok: boolean }>(`/tables/order-items/${tableOrderItemId}/void`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
+
+  requestTableBill: (tableId: number) =>
+    request<{ ok: boolean }>(`/tables/${tableId}/request-bill`, { method: "POST" }),
+
+  checkoutTable: (tableId: number, payment_method: "cash" | "card" | "transfer") =>
+    request<Receipt>(`/tables/${tableId}/checkout`, {
+      method: "POST",
+      body: JSON.stringify({ payment_method }),
+    }),
 };

@@ -28,6 +28,8 @@ from seed import seed as seed_database
 from routers.auth_router import router as auth_router
 from routers.menu_router import router as menu_router
 from routers.sales_router import router as sales_router
+from routers.photos_router import router as photos_router
+from routers.tables_router import router as tables_router
 
 app = FastAPI(title="Colonel's Bakery and Restaurant — Till API")
 
@@ -56,6 +58,8 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(menu_router)
 app.include_router(sales_router)
+app.include_router(photos_router)
+app.include_router(tables_router)
 
 
 @app.on_event("startup")

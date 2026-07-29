@@ -4,11 +4,13 @@ export default {
   theme: {
     extend: {
       colors: {
+        // Matched to the real "Colonels Restaurant & Garden" logo: deep red
+        // ring/script on a true-black background (sampled from assets/real logo.jpg).
         brand: {
-          red: "#FF3B30",
-          navy: "#0A0A1A",
-          surface: "#151527",
-          surface2: "#1D1D33",
+          red: "#C61D24",
+          navy: "#0A0A0A",
+          surface: "#161616",
+          surface2: "#212121",
         },
       },
     },

@@ -51,6 +51,14 @@ CREATE TABLE IF NOT EXISTS menu_items (
     UNIQUE (category_id, name)
 );
 
+-- A manager-uploaded item photo (e.g. a new item added from the dashboard)
+-- is stored directly in the database rather than on disk — Render's
+-- filesystem is ephemeral, so a file saved locally would vanish on the
+-- next redeploy/restart. base_photo_url then points at the backend's
+-- GET /photos/{item_id} route, which streams these bytes back out.
+ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS photo_blob BYTEA;
+ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS photo_content_type TEXT;
+
 CREATE INDEX IF NOT EXISTS idx_menu_items_category ON menu_items(category_id);
 
 -- Every sellable thing is an item_variant, even single-price items (they get
@@ -113,18 +121,47 @@ CREATE TABLE IF NOT EXISTS inventory_daily (
 CREATE INDEX IF NOT EXISTS idx_inventory_daily_date ON inventory_daily(date);
 
 -- ============================================================
+-- RESTAURANT TABLES (dine-in service) — table itself, defined here;
+-- table_orders/table_order_items are defined after SALES below, since a
+-- table_order references a sales row once its bill is paid.
+-- ============================================================
+
+-- A fixed set of physical tables (seeded once, see seed.py). Dine-in
+-- ordering works as a running tab (table_orders/table_order_items) that
+-- accumulates over the course of a meal, separate from the till's
+-- ring-up-and-pay-immediately counter sales — a table only turns into a
+-- `sales` row (via checkout_table_order) once the bill is actually paid.
+CREATE TABLE IF NOT EXISTS restaurant_tables (
+    id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    label       TEXT NOT NULL UNIQUE,
+    sort_order  INTEGER NOT NULL DEFAULT 0
+);
+
+-- ============================================================
 -- SALES
 -- ============================================================
 
+-- payment_method: 'cash', 'card' (POS terminal), or 'transfer' (bank
+-- transfer). Stored as 'card' for historical/schema reasons — the till and
+-- dashboard both display it as "POS".
 CREATE TABLE IF NOT EXISTS sales (
     id              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     timestamp       TEXT NOT NULL,
     staff_user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-    payment_method  TEXT NOT NULL CHECK (payment_method IN ('cash', 'card')),
+    payment_method  TEXT NOT NULL CHECK (payment_method IN ('cash', 'card', 'transfer')),
     subtotal        REAL NOT NULL CHECK (subtotal >= 0),
     vat_amount      REAL NOT NULL CHECK (vat_amount >= 0),
     total           REAL NOT NULL CHECK (total >= 0)
 );
+
+-- Re-applied on every boot so an already-existing `sales` table (from
+-- before "transfer" existed) picks up the wider CHECK too.
+ALTER TABLE sales DROP CONSTRAINT IF EXISTS sales_payment_method_check;
+ALTER TABLE sales ADD CONSTRAINT sales_payment_method_check CHECK (payment_method IN ('cash', 'card', 'transfer'));
+
+-- NULL for a walk-in counter sale; set for a dine-in sale created via
+-- checkout_table_order(), so sales can be reported/filtered by table too.
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS table_id INTEGER REFERENCES restaurant_tables(id) ON DELETE RESTRICT;
 
 CREATE INDEX IF NOT EXISTS idx_sales_timestamp ON sales(timestamp);
 CREATE INDEX IF NOT EXISTS idx_sales_staff ON sales(staff_user_id);
@@ -143,6 +180,46 @@ CREATE TABLE IF NOT EXISTS sale_items (
 
 CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items(sale_id);
 CREATE INDEX IF NOT EXISTS idx_sale_items_variant ON sale_items(item_variant_id);
+
+-- ============================================================
+-- TABLE ORDERS (dine-in running tab, closes out into a sales row)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS table_orders (
+    id              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    table_id        INTEGER NOT NULL REFERENCES restaurant_tables(id) ON DELETE RESTRICT,
+    staff_user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    opened_at       TEXT NOT NULL,
+    closed_at       TEXT,
+    status          TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'bill_requested', 'closed')),
+    sale_id         INTEGER REFERENCES sales(id) ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS idx_table_orders_table ON table_orders(table_id);
+CREATE INDEX IF NOT EXISTS idx_table_orders_status ON table_orders(status);
+-- Only one non-closed order per table at a time.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_table_orders_one_open_per_table
+    ON table_orders(table_id) WHERE status <> 'closed';
+
+-- Items build up here as the meal progresses; a line only becomes a
+-- sale_items row (financial record) at final checkout. Ingredient stock is
+-- depleted the moment an item is added here (the kitchen starts cooking
+-- then, not when the bill is eventually paid) — see services.py.
+CREATE TABLE IF NOT EXISTS table_order_items (
+    id                  INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    table_order_id      INTEGER NOT NULL REFERENCES table_orders(id) ON DELETE RESTRICT,
+    item_variant_id     INTEGER NOT NULL REFERENCES item_variants(id) ON DELETE RESTRICT,
+    quantity            INTEGER NOT NULL CHECK (quantity > 0),
+    unit_price          REAL NOT NULL CHECK (unit_price >= 0),
+    added_at            TEXT NOT NULL,
+    added_by_user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    is_voided           INTEGER NOT NULL DEFAULT 0 CHECK (is_voided IN (0, 1)),
+    voided_by           INTEGER REFERENCES users(id) ON DELETE RESTRICT,
+    void_reason         TEXT,
+    voided_at           TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_table_order_items_order ON table_order_items(table_order_id);
 
 -- ============================================================
 -- PURCHASES & WASTAGE (ingredient stock movements)

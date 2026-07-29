@@ -25,29 +25,41 @@ export default function ItemTile({ item, onAddSingleVariant, onOpenVariants }: P
     }
   }
 
+  // A manager-uploaded photo is stored as a full URL to the backend's
+  // photo endpoint; a bundled/curated photo is a bare filename resolved
+  // against this app's own public/menu_photos/ folder.
+  const photoSrc = item.base_photo_url
+    ? item.base_photo_url.startsWith("http")
+      ? item.base_photo_url
+      : `/menu_photos/${item.base_photo_url}`
+    : null;
+
   return (
     <button
       onClick={handleTap}
       disabled={allSoldOut}
-      className="tap-target relative rounded-2xl overflow-hidden bg-brand-surface border border-white/10 text-left shadow-md disabled:opacity-50"
+      className="tap-target relative flex flex-col rounded-2xl overflow-hidden bg-brand-surface border border-white/10 text-left shadow-lg disabled:opacity-50"
     >
-      <div className="aspect-[4/3] w-full bg-brand-surface2">
-        {item.base_photo_url && (
+      {/* Square crop handles the mixed portrait/landscape/square source
+          photos consistently, centered and cropped rather than distorted. */}
+      <div className="aspect-square w-full bg-brand-surface2 overflow-hidden">
+        {photoSrc && (
           <img
-            src={`/menu_photos/${item.base_photo_url}`}
+            src={photoSrc}
             alt=""
-            className="w-full h-full object-cover"
+            className="w-full h-full object-cover object-center"
             draggable={false}
+            loading="lazy"
           />
         )}
       </div>
-      <div className="p-3">
-        <div className="font-semibold leading-tight">{item.name}</div>
-        <div className="text-brand-red font-bold mt-1">{priceLabel}</div>
+      <div className="p-3 flex-1 flex flex-col justify-between">
+        <div className="font-semibold leading-tight text-[15px]">{item.name}</div>
+        <div className="text-brand-red font-bold mt-1 text-sm">{priceLabel}</div>
       </div>
       {allSoldOut && (
-        <div className="absolute inset-0 bg-black/70 flex items-center justify-center">
-          <span className="text-white font-bold text-lg tracking-wide border-2 border-white rounded-lg px-3 py-1 -rotate-6">
+        <div className="absolute inset-0 bg-black/75 flex items-center justify-center">
+          <span className="text-white font-bold text-base tracking-wide border-2 border-white rounded-lg px-3 py-1 -rotate-6">
             SOLD OUT
           </span>
         </div>

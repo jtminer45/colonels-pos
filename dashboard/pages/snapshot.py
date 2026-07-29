@@ -1,6 +1,6 @@
 import streamlit as st
 
-from db import today_str
+from db import today_str, now_local
 import queries
 
 st.title("📊 Today's Snapshot")
@@ -15,14 +15,47 @@ c2.metric("VAT Collected (7.5%)", f"₦{totals['vat']:,.0f}")
 c3.metric("Estimated Profit", f"₦{totals['estimated_profit']:,.0f}")
 c4.metric("Sales Count", f"{totals['sale_count']:,}")
 
-c5, c6 = st.columns(2)
-c5.metric("Cash Sales", f"₦{totals['cash']:,.0f}")
-c6.metric("Card Sales", f"₦{totals['card']:,.0f}")
+c5, c6, c7 = st.columns(3)
+c5.metric("Cash", f"₦{totals['cash']:,.0f}")
+c6.metric("POS", f"₦{totals['card']:,.0f}")
+c7.metric("Transfer", f"₦{totals['transfer']:,.0f}")
 
 st.caption(
     "Estimated profit = revenue − VAT − estimated ingredient cost of items sold − wastage value. "
     "Ingredient cost uses the average purchase price logged so far for each ingredient."
 )
+
+st.divider()
+
+st.subheader("💳 Payment Method Breakdown")
+pcol1, pcol2 = st.columns(2)
+
+with pcol1:
+    st.markdown(f"**Today ({date})**")
+    today_breakdown = queries.payment_method_breakdown(date, date)
+    if today_breakdown.empty:
+        st.info("No sales yet today.")
+    else:
+        st.dataframe(
+            today_breakdown.rename(columns={
+                "payment_method": "Method", "transaction_count": "Transactions", "total_amount": "Total (₦)",
+            }),
+            width="stretch", hide_index=True,
+        )
+
+with pcol2:
+    month_start = now_local().replace(day=1).strftime("%Y-%m-%d")
+    st.markdown(f"**This Month ({month_start} to {date})**")
+    month_breakdown = queries.payment_method_breakdown(month_start, date)
+    if month_breakdown.empty:
+        st.info("No sales yet this month.")
+    else:
+        st.dataframe(
+            month_breakdown.rename(columns={
+                "payment_method": "Method", "transaction_count": "Transactions", "total_amount": "Total (₦)",
+            }),
+            width="stretch", hide_index=True,
+        )
 
 st.divider()
 
