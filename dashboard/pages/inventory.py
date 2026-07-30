@@ -30,7 +30,7 @@ with tab_daily:
         JOIN item_variants iv ON iv.id = idl.item_variant_id
         JOIN menu_items mi ON mi.id = iv.menu_item_id
         JOIN categories c ON c.id = mi.category_id
-        WHERE idl.date = %s
+        WHERE idl.date = ?
         ORDER BY c.sort_order, mi.name, iv.variant_label
         """,
         (today_str(),),
@@ -135,7 +135,29 @@ with tab_stock:
 
     low = usage[usage["low_stock"]]
     if not low.empty:
-        st.error(f"⚠️ {len(low)} ingredient(s) at or below reorder threshold — log a purchase on the Costs & Purchases page.")
+        st.error(f"⚠️ {len(low)} ingredient(s) at or below reorder threshold — log a purchase on the Costs & Expenses page.")
+
+    st.divider()
+    st.subheader("Update Stock (Manual Count)")
+    st.caption(
+        "Physically count what's on the shelf and enter it here yourself — no need to pick from a list. "
+        "Type the ingredient's name; if it's new, it's created automatically. This sets the stock to "
+        "exactly what you counted, it doesn't add to what's already there."
+    )
+    with st.form("stock_count_form"):
+        col1, col2, col3 = st.columns(3)
+        stock_name = col1.text_input("Ingredient", placeholder="e.g. Flour")
+        stock_qty = col2.number_input("Amount", min_value=0.0, step=0.5)
+        stock_unit = col3.selectbox("Unit", options=["kg", "grams", "litre", "units"])
+        stock_submitted = st.form_submit_button("Save Stock Count", type="primary")
+
+    if stock_submitted:
+        if not stock_name.strip():
+            st.error("Ingredient name is required.")
+        else:
+            services.set_ingredient_stock(stock_name.strip(), stock_qty, stock_unit, user["id"])
+            st.success(f"Stock for {stock_name.strip()} set to {stock_qty:g} {stock_unit}.")
+            st.rerun()
 
 with tab_wastage:
     st.subheader("Log Wastage")

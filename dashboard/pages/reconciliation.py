@@ -30,13 +30,15 @@ if submitted:
         today_str(), staff_options[staff_label], counted, notes, user["id"]
     )
     if abs(result["discrepancy_amount"]) < 0.01:
-        st.success(f"Matches system total of ₦{result['system_cash_total']:,.0f}. No discrepancy.")
+        st.success(f"Matches expected cash of ₦{result['expected_cash']:,.0f}. No discrepancy.")
     else:
         st.error(
             f"Discrepancy of ₦{result['discrepancy_amount']:,.0f} "
-            f"(system expected ₦{result['system_cash_total']:,.0f}, counted ₦{result['counted_cash_total']:,.0f}). "
+            f"(expected ₦{result['expected_cash']:,.0f} — ₦{result['system_cash_total']:,.0f} cash sales "
+            f"minus ₦{result['cash_expenses_total']:,.0f} cash expenses today — counted ₦{result['counted_cash_total']:,.0f}). "
             f"Logged to the audit trail."
         )
+    st.caption(f"Cash sales so far this month: ₦{result['month_cash_total']:,.0f}")
     st.rerun()
 
 st.divider()
@@ -53,8 +55,13 @@ else:
     def highlight_mismatch(row):
         return ["background-color: rgba(198,29,36,0.15)" if abs(row["discrepancy_amount"]) > 0.01 else "" for _ in row]
 
+    display = history.rename(columns={
+        "date": "Date", "staff": "Staff", "system_cash_total": "Cash Sales",
+        "cash_expenses_total": "Cash Expenses", "counted_cash_total": "Counted",
+        "discrepancy_amount": "discrepancy_amount", "notes": "Notes", "created_at": "Recorded At",
+    })
     st.dataframe(
-        history.style.apply(highlight_mismatch, axis=1),
+        display.style.apply(highlight_mismatch, axis=1),
         width="stretch", hide_index=True,
     )
     mismatches = history[history["discrepancy_amount"].abs() > 0.01]

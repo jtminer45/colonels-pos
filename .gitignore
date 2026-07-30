@@ -3,6 +3,12 @@ venv/
 __pycache__/
 *.pyc
 
+# Local SQLite database — real shop data (sales, staff accounts, password
+# hashes), never committed. WAL-mode sidecar files included.
+database/*.db
+database/*.db-wal
+database/*.db-shm
+
 # Backend secrets
 backend/.secret_key
 .env

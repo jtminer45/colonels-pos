@@ -116,7 +116,7 @@ def require_login() -> dict:
     conn = get_connection()
     try:
         row = conn.execute(
-            "SELECT role, active FROM users WHERE id = %s", (user["id"],)
+            "SELECT role, active FROM users WHERE id = ?", (user["id"],)
         ).fetchone()
     finally:
         conn.close()

@@ -12,7 +12,7 @@ def log_action(conn, user_id: int, action_type: str, details: str = "") -> None:
     log entry commits atomically together with the action it describes.
     """
     conn.execute(
-        "INSERT INTO audit_log (timestamp, user_id, action_type, details) VALUES (%s, %s, %s, %s)",
+        "INSERT INTO audit_log (timestamp, user_id, action_type, details) VALUES (?, ?, ?, ?)",
         (now_iso(), user_id, action_type, details),
     )
 

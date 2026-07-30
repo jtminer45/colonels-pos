@@ -1,3 +1,9 @@
+# LEGACY / OPTIONAL cloud deployment config — not used by the local-primary
+# setup described in README.md. Kept here in case cloud hosting is ever
+# revisited, but currently out of date: the app now runs on SQLite, and this
+# file still targets the old hosted-Postgres architecture (DATABASE_URL,
+# psycopg2). It would need updating before it could deploy successfully
+# again — do not assume it works as-is.
 databases:
   - name: colonels-pos-db
     plan: free

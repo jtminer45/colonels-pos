@@ -1,14 +1,13 @@
 """
 Backend API for the till PWA.
 
-Originally local-only (http://localhost:8000 on the same laptop as
-everything else). Now deployable to Render for public access, with the
-till app (on Netlify) and the Streamlit dashboard (also on Render) as its
-clients. If this later moves to a Raspberry Pi on local WiFi instead, only
-the hosting target changes — no database or business-logic code changes.
+Runs locally at the shop — http://localhost:8000 on the same machine as
+everything else (or a shared machine/Raspberry Pi on the local WiFi if
+multiple till devices need to reach it). No internet connection required;
+the SQLite database file lives on disk right next to this process.
 
 The Streamlit manager dashboard does NOT go through this API — it talks to
-database/services.py directly (same Postgres database, different process).
+database/services.py directly (same SQLite database, different process).
 """
 
 import os
@@ -34,14 +33,11 @@ from routers.tables_router import router as tables_router
 app = FastAPI(title="Colonel's Bakery and Restaurant — Till API")
 
 # ALLOWED_ORIGINS is a comma-separated list of exact origins allowed to call
-# this API from a browser (e.g. "https://colonels-till.netlify.app"). This
-# API now sits on the public internet, so — unlike the original local-only
-# version — CORS is locked down to known origins rather than left wide
-# open. Auth itself does not depend on CORS (the till sends a Bearer token,
-# not a cookie), but restricting origins still stops arbitrary websites
-# from directing a browser to probe this API. Local dev origins are always
-# allowed so `npm run dev` keeps working without extra config.
-_default_dev_origins = "http://localhost:5173,http://127.0.0.1:5173"
+# this API from a browser. Defaults cover the local dev server and the
+# till app served from this same machine; set it explicitly (e.g. to
+# "http://192.168.1.50:4173") if a till device reaches this API over the
+# shop's local WiFi instead of localhost.
+_default_dev_origins = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173"
 allowed_origins = [
     o.strip()
     for o in os.environ.get("ALLOWED_ORIGINS", _default_dev_origins).split(",")
@@ -65,12 +61,10 @@ app.include_router(tables_router)
 @app.on_event("startup")
 def on_startup():
     init_db()
-    # Idempotent (ON CONFLICT DO NOTHING / "skip if username exists"), so
-    # safe to run on every boot. Runs here — rather than requiring someone
-    # to exec into the container or run it from a machine that can reach
-    # the database directly — so a fresh Postgres instance gets the starter
-    # menu and first accounts the moment the service comes up. Temporary
-    # passwords for newly-created accounts print to this service's logs.
+    # Idempotent (upserts menu items, skips existing usernames), so safe to
+    # run on every boot — a fresh database file gets the starter menu and
+    # first accounts the moment the service starts. Temporary passwords for
+    # newly-created accounts print to this service's logs.
     seed_database()
 
 

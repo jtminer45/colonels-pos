@@ -81,7 +81,7 @@ def login(username: str, password: str) -> AuthenticatedUser:
     try:
         row = conn.execute(
             "SELECT id, username, password_hash, salt, role, active, must_change_password "
-            "FROM users WHERE username = %s",
+            "FROM users WHERE username = ?",
             (username,),
         ).fetchone()
 
@@ -100,10 +100,10 @@ def login(username: str, password: str) -> AuthenticatedUser:
 
         login_at = now_iso()
         cur = conn.execute(
-            "INSERT INTO sessions (user_id, login_at) VALUES (%s, %s) RETURNING id",
+            "INSERT INTO sessions (user_id, login_at) VALUES (?, ?)",
             (row["id"], login_at),
         )
-        session_id = cur.fetchone()["id"]
+        session_id = cur.lastrowid
         conn.commit()
 
         return AuthenticatedUser(
@@ -122,7 +122,7 @@ def logout(session_id: int) -> None:
     conn = get_connection()
     try:
         conn.execute(
-            "UPDATE sessions SET logout_at = %s WHERE id = %s AND logout_at IS NULL",
+            "UPDATE sessions SET logout_at = ? WHERE id = ? AND logout_at IS NULL",
             (now_iso(), session_id),
         )
         conn.commit()
@@ -135,7 +135,7 @@ def set_password(user_id: int, new_password: str, *, force_change_next_login: bo
     conn = get_connection()
     try:
         conn.execute(
-            "UPDATE users SET password_hash = %s, salt = %s, must_change_password = %s WHERE id = %s",
+            "UPDATE users SET password_hash = ?, salt = ?, must_change_password = ? WHERE id = ?",
             (password_hash, salt, 1 if force_change_next_login else 0, user_id),
         )
         conn.commit()
@@ -154,7 +154,7 @@ def get_user_role(user_id: int) -> Optional[str]:
     conn = get_connection()
     try:
         row = conn.execute(
-            "SELECT role FROM users WHERE id = %s AND active = 1", (user_id,)
+            "SELECT role FROM users WHERE id = ? AND active = 1", (user_id,)
         ).fetchone()
         return row["role"] if row else None
     finally:
