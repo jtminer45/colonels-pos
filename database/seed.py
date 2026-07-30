@@ -91,6 +91,7 @@ MENU = {
         ("Samosa", "samosa.jpg", STANDARD_SNACK),
         ("Spring Rolls", "spring-rolls.jpg", STANDARD_SNACK),
         ("Cinnamon Rolls", "cinnamon-rolls.jpg", STANDARD_SNACK),
+        ("Chips", "chips.jpg", STANDARD_SNACK),
     ],
     "Restaurant — Local Dishes": [
         ("Jollof Rice", "jollof-rice.jpg", STANDARD_LOCAL),
@@ -105,7 +106,6 @@ MENU = {
         ("Goat Meat", "goat-meat.jpg", STANDARD_LOCAL),
         ("Fried Chicken", "fried-chicken.jpg", STANDARD_LOCAL),
         ("Potatoes", "potatoes.jpg", STANDARD_LOCAL),
-        ("Chips", "chips.jpg", STANDARD_LOCAL),
     ],
     "Restaurant — Intercontinental Dishes": [
         ("Grilled Chicken", "grilled-chicken.jpg", STANDARD_INTERCONTINENTAL),
